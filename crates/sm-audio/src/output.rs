@@ -13,9 +13,19 @@ pub struct Player {
     pub decks: Vec<DeckHandle>,
     pub sample_rate: u32,
     pub device_name: String,
+    /// Repaint de la UI tras aplicar comandos (seek/play/…): el playhead
+    /// refleja el estado real del motor inmediatamente, no en el próximo input.
+    pub repaint: Arc<parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
     // mantiene vivo el stream y la bomba de comandos
     _stream: cpal::Stream,
     _pump: std::thread::JoinHandle<()>,
+}
+
+impl Player {
+    /// Registra el callback de repaint de la UI (egui Context).
+    pub fn set_repaint(&self, cb: Arc<dyn Fn() + Send + Sync>) {
+        *self.repaint.lock() = Some(cb);
+    }
 }
 
 impl Player {
@@ -66,6 +76,11 @@ impl Player {
         )?;
         stream.play()?;
         // bomba de comandos: aplica transporte; Load decodifica y hace swap
+        // callback opcional de repaint: la UI registra el suyo para reflejar
+        // comandos (seek/play/pause) de inmediato, no en el próximo input
+        let repaint_cb: Arc<parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>> =
+            Arc::new(parking_lot::Mutex::new(None));
+        let repaint_for_pump = repaint_cb.clone();
         let pump = std::thread::Builder::new()
             .name("sm-audio-pump".into())
             .spawn(move || {
@@ -76,6 +91,9 @@ impl Player {
                         while let Ok(cmd) = rx.try_recv() {
                             work = true;
                             apply_cmd(&shared_list[i], cmd);
+                            if let Some(cb) = repaint_for_pump.lock().as_ref() {
+                                cb();
+                            }
                         }
                     }
                     if !work {
@@ -87,6 +105,7 @@ impl Player {
             decks: handles,
             sample_rate,
             device_name,
+            repaint: repaint_cb,
             _stream: stream,
             _pump: pump,
         })

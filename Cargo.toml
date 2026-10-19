@@ -37,6 +37,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 eframe = { version = "0.27", features = ["wgpu"] }
 egui = "0.27"
+egui_extras = "0.27"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 ort = { version = "=2.0.0-rc.9", features = ["download-binaries"] }
 

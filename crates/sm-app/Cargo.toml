@@ -19,6 +19,7 @@ sm-i18n = { workspace = true }
 anyhow = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
+egui_extras = { workspace = true }
 image = { workspace = true }
 rfd = { workspace = true }
 chrono = { workspace = true }

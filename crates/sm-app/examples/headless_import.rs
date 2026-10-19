@@ -16,7 +16,8 @@ use std::time::Instant;
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let root = PathBuf::from(
-        args.get(1).expect("uso: headless_import <carpeta> [workers]"),
+        args.get(1)
+            .expect("uso: headless_import <carpeta> [workers]"),
     );
     let workers: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(6);
     let data_dir = dirs::data_local_dir()
@@ -29,7 +30,11 @@ fn main() -> anyhow::Result<()> {
 
     let t0 = Instant::now();
     let files = scan_root(&root);
-    println!("escaneo: {} archivos en {:.1} s", files.len(), t0.elapsed().as_secs_f64());
+    println!(
+        "escaneo: {} archivos en {:.1} s",
+        files.len(),
+        t0.elapsed().as_secs_f64()
+    );
 
     // 1) upsert de metadatos (paralelo con rayon, DB en serie por Mutex)
     let metas: Vec<_> = {
@@ -56,14 +61,30 @@ fn main() -> anyhow::Result<()> {
             })
             .collect()
     };
-    println!("metadatos: {} pistas en {:.1} s", metas.len(), t0.elapsed().as_secs_f64());
+    println!(
+        "metadatos: {} pistas en {:.1} s",
+        metas.len(),
+        t0.elapsed().as_secs_f64()
+    );
     let stats = db.lock().unwrap().stats()?;
     println!("BD: total={} pendientes={}", stats.total, stats.pending);
 
     // 2) análisis paralelo
     let models = Arc::new(Models::load(&sm_core::pipeline::default_models_dir()));
-    println!("modelos: {}", if models.available() { "activos" } else { "fallback" });
-    let queue = Arc::new(Mutex::new(metas.clone().into_iter().collect::<std::collections::VecDeque<_>>()));
+    println!(
+        "modelos: {}",
+        if models.available() {
+            "activos"
+        } else {
+            "fallback"
+        }
+    );
+    let queue = Arc::new(Mutex::new(
+        metas
+            .clone()
+            .into_iter()
+            .collect::<std::collections::VecDeque<_>>(),
+    ));
     let done = Arc::new(AtomicU64::new(0));
     let failed = Arc::new(AtomicU64::new(0));
     let total = metas.len() as u64;
@@ -78,7 +99,11 @@ fn main() -> anyhow::Result<()> {
             s.spawn(move || loop {
                 let item = queue.lock().unwrap().pop_front();
                 let Some((id, path)) = item else { break };
-                match analyze_track(std::path::Path::new(&path), &AnalyzeOptions::default(), &models) {
+                match analyze_track(
+                    std::path::Path::new(&path),
+                    &AnalyzeOptions::default(),
+                    &models,
+                ) {
                     Ok(a) => {
                         if let Ok(mut db) = db.lock() {
                             if let Err(e) = db.save_analysis(id, &a) {
@@ -97,17 +122,23 @@ fn main() -> anyhow::Result<()> {
                 }
                 let d = done.load(Ordering::Relaxed) + failed.load(Ordering::Relaxed);
                 if d % 50 == 0 {
-                    println!("  progreso {d}/{total} ({:.1} pistas/min)",
-                        d as f64 / t1.elapsed().as_secs_f64() * 60.0);
+                    println!(
+                        "  progreso {d}/{total} ({:.1} pistas/min)",
+                        d as f64 / t1.elapsed().as_secs_f64() * 60.0
+                    );
                 }
             });
         }
     });
-    println!("análisis: {} OK, {} errores, {:.1} s ({:.1} pistas/min)",
-        done.load(Ordering::Relaxed), failed.load(Ordering::Relaxed),
+    println!(
+        "análisis: {} OK, {} errores, {:.1} s ({:.1} pistas/min)",
+        done.load(Ordering::Relaxed),
+        failed.load(Ordering::Relaxed),
         t1.elapsed().as_secs_f64(),
         (done.load(Ordering::Relaxed) + failed.load(Ordering::Relaxed)) as f64
-            / t1.elapsed().as_secs_f64() * 60.0);
+            / t1.elapsed().as_secs_f64()
+            * 60.0
+    );
 
     // 3) verificación: consulta ordenada por BPM + una búsqueda FTS
     let db = db.lock().unwrap();
@@ -118,19 +149,30 @@ fn main() -> anyhow::Result<()> {
         ..Default::default()
     };
     for r in db.query(&q)? {
-        println!("  top BPM: {:>40} {:>4} {:>7.2} E{:>3}", r.title.chars().take(40).collect::<String>(),
-            r.key_camelot.clone().unwrap_or_default(), r.bpm.unwrap_or(0.0),
-            r.energy.map(|e| format!("{}", e.round())).unwrap_or_default());
+        println!(
+            "  top BPM: {:>40} {:>4} {:>7.2} E{:>3}",
+            r.title.chars().take(40).collect::<String>(),
+            r.key_camelot.clone().unwrap_or_default(),
+            r.bpm.unwrap_or(0.0),
+            r.energy
+                .map(|e| format!("{}", e.round()))
+                .unwrap_or_default()
+        );
     }
     let qf = sm_db::LibraryQuery {
         text: Some("love".into()),
         limit: 3,
         ..Default::default()
     };
-    println!("FTS 'love': {} coincidencias (top 3 pedidas)", db.count(&qf)?);
+    println!(
+        "FTS 'love': {} coincidencias (top 3 pedidas)",
+        db.count(&qf)?
+    );
     let stats = db.stats()?;
-    println!("BD final: total={} analizadas={} pendientes={} fallidas={}",
-        stats.total, stats.analyzed, stats.pending, stats.failed);
+    println!(
+        "BD final: total={} analizadas={} pendientes={} fallidas={}",
+        stats.total, stats.analyzed, stats.pending, stats.failed
+    );
     Ok(())
 }
 

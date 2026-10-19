@@ -8,7 +8,9 @@ use sm_model::CuePoint;
 
 fn main() -> anyhow::Result<()> {
     let out = std::path::PathBuf::from(
-        std::env::args().nth(1).expect("uso: export_all <carpeta_salida>"),
+        std::env::args()
+            .nth(1)
+            .expect("uso: export_all <carpeta_salida>"),
     );
     std::fs::create_dir_all(&out)?;
     let db_path = dirs::data_local_dir()
@@ -16,7 +18,10 @@ fn main() -> anyhow::Result<()> {
         .join("smart-mix")
         .join("library.db");
     let db = LibraryDb::open(&db_path)?;
-    let q = LibraryQuery { limit: 0, ..Default::default() };
+    let q = LibraryQuery {
+        limit: 0,
+        ..Default::default()
+    };
     let rows = db.query(&q)?;
     println!("exportando {} pistas → {}", rows.len(), out.display());
 

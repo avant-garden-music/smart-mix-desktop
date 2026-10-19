@@ -11,11 +11,16 @@ fn main() -> anyhow::Result<()> {
         .join("smart-mix")
         .join("library.db");
     let mut db = LibraryDb::open(&db_path)?;
-    let rows = db.query(&LibraryQuery { limit: 0, ..Default::default() })?;
+    let rows = db.query(&LibraryQuery {
+        limit: 0,
+        ..Default::default()
+    })?;
     let mut updated = 0;
     for r in &rows {
         let p = std::path::PathBuf::from(
-            db.track_full(r.id)?.map(|f| f.meta.path).unwrap_or_default(),
+            db.track_full(r.id)?
+                .map(|f| f.meta.path)
+                .unwrap_or_default(),
         );
         if p.as_os_str().is_empty() {
             continue;

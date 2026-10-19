@@ -113,7 +113,13 @@ impl AnalysisPool {
                     .expect("spawn analyzer"),
             );
         }
-        AnalysisPool { state, events: rx, workers: handles, stop, processed }
+        AnalysisPool {
+            state,
+            events: rx,
+            workers: handles,
+            stop,
+            processed,
+        }
     }
 
     pub fn enqueue(&self, items: Vec<(i64, String)>) {
