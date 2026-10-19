@@ -15,11 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Deps Linux (audio)
+      - name: Deps Linux (audio + GTK para rfd)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev pkg-config
+          sudo apt-get install -y libasound2-dev pkg-config libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev || sudo apt-get install -y libasound2-dev pkg-config libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.0-dev
       - name: Build
         run: cargo build --workspace --verbose
       - name: Tests (motor + db + export + i18n + audio)
