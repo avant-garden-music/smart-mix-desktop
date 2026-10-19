@@ -1,0 +1,12 @@
+[package]
+name = "sm-audio"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+symphonia = { workspace = true }
+cpal = { workspace = true }
+tracing = { workspace = true }
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
