@@ -113,9 +113,10 @@ pub struct SmartMixApp {
     active_deck: usize,
     deck_track_id: [Option<i64>; 2],
     wave_zoom: (f64, f64),
-    /// Pista a la que pertenece `wave_zoom` — al cambiar de pista el zoom se
-    /// resetea a ventana completa (evita heredar la ventana de la anterior).
-    wave_zoom_track: Option<i64>,
+    /// Clave (pista, duración×20) para la que vale `wave_zoom`: el zoom se
+    /// resetea a ventana completa al cambiar de pista O cuando la duración
+    /// cambia (p. ej. el deck completa la carga y la duración real crece).
+    wave_zoom_key: (Option<i64>, i64),
     // usb
     usb_drives: Vec<UsbDrive>,
     usb_expanded: HashMap<String, bool>,
@@ -196,7 +197,7 @@ impl SmartMixApp {
             active_deck: 0,
             deck_track_id: [None, None],
             wave_zoom: (0.0, 0.0),
-            wave_zoom_track: None,
+            wave_zoom_key: (None, 0),
             usb_drives: Vec::new(),
             usb_expanded: HashMap::new(),
             usb_crate_view: None,
@@ -631,6 +632,29 @@ impl SmartMixApp {
                 };
                 let playing = track_loaded && deck.map(|d| d.is_playing()).unwrap_or(false);
 
+                // DIAGNÓSTICO waveform: estado coherente una vez por segundo
+                {
+                    use std::sync::atomic::{AtomicU64, Ordering};
+                    static LAST: AtomicU64 = AtomicU64::new(0);
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64;
+                    if now - LAST.load(Ordering::Relaxed) > 1000 && playing {
+                        LAST.store(now, Ordering::Relaxed);
+                        eprintln!(
+                            "[wave] title={:?} pos={:.2} dur={:.2} db_dur={:.2} deck_dur={:.2} zoom=({:.2},{:.2})",
+                            full.meta.title,
+                            pos.unwrap_or(0.0),
+                            duration,
+                            full.analysis.duration_s,
+                            deck.map(|d| d.duration_s()).unwrap_or(0.0),
+                            self.wave_zoom.0,
+                            self.wave_zoom.1,
+                        );
+                    }
+                }
+
                 ui.horizontal(|ui| {
                     // carátula
                     let cs = 56.0;
@@ -853,11 +877,32 @@ impl SmartMixApp {
                 let cues: Vec<f64> = full.analysis.cues.iter().map(|c| c.time_s).collect();
                 let segs = full.analysis.segments.clone();
                 let mut seek_tx: Option<f64> = None;
-                // zoom ligado a la pista: la primera vez que se muestra (o tras
-                // cambiar de pista) la ventana es la duración completa
-                if self.wave_zoom_track != self.selected_id {
+                // zoom ligado a (pista, duración): la ventana completa se
+                // re-establece al cambiar de pista O al cambiar la duración
+                // (deck completa la carga → duración real sustituye a la de BD)
+                let zkey = (self.selected_id, (duration * 20.0).round() as i64);
+                if self.wave_zoom_key != zkey {
                     self.wave_zoom = (0.0, duration.max(0.001));
-                    self.wave_zoom_track = self.selected_id;
+                    self.wave_zoom_key = zkey;
+                }
+                // auto-heal: si el deck decodificó una duración real distinta
+                // a la del análisis (>0.5 s), corregir la BD para que tabla,
+                // lectura pos/total y waveform usen siempre la duración real
+                if track_loaded && (duration - full.analysis.duration_s).abs() > 0.5 {
+                    if let Some(id_fix) = self.selected_id {
+                        let d_fix = duration;
+                        if let Ok(db) = self.db.lock() {
+                            if db.set_duration(id_fix, d_fix).is_ok() {
+                                eprintln!(
+                                    "[heal] duración corregida id={id_fix}: {:.2} → {d_fix:.2}",
+                                    full.analysis.duration_s
+                                );
+                            }
+                        }
+                        if let Some(f) = self.detail.as_mut() {
+                            f.analysis.duration_s = duration;
+                        }
+                    }
                 }
                 let zoom = &mut self.wave_zoom;
                 ui.add(&mut WaveView {

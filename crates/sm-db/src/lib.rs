@@ -352,6 +352,16 @@ impl LibraryDb {
         ensure_track(n, track_id, "save_analysis")
     }
 
+    /// Corrige la duración persistida (auto-heal cuando el deck revela la
+    /// duración real del archivo y difiere del análisis).
+    pub fn set_duration(&self, track_id: i64, duration_s: f64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tracks SET duration_s=?2 WHERE id=?1",
+            params![track_id, duration_s],
+        )?;
+        Ok(())
+    }
+
     pub fn set_analysis_status(&self, track_id: i64, status: AnalysisStatus) -> Result<()> {
         let n = self.conn.execute(
             "UPDATE tracks SET analysis_status=?1 WHERE id=?2",
