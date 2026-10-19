@@ -681,7 +681,7 @@ impl SmartMixApp {
                                 } else {
                                     &full.meta.title
                                 })
-                                .font(font_heading(16.0))
+                                .font(crate::theme::font_editorial(20.0))
                                 .color(t.text),
                             );
                             if let Some(p) = &deck_handles {

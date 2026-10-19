@@ -43,3 +43,19 @@ mejora la exactitud.
   Los formatos de exportación (NML, rekordbox.xml, crate de Serato,
   EngineLibrary) se implementaron desde la documentación pública y la
   ingeniería propia del proyecto harmonic-engine (core/tagger).
+
+## Tipografía (SIL OFL 1.1) — decisión 2026-10-19
+
+Selección definitiva open source (sustituye a Termina y Tusker Grotesk,
+que quedaron REMOVIDAS del repo por no ser OFL):
+
+| Rol | Familia | Archivo | Origen |
+|---|---|---|---|
+| Display / acentos de marca | Dela Gothic One | `assets/DelaGothicOne-Regular.ttf` | Google Fonts (OFL) |
+| Heading / encabezados | Sora 700 | `assets/fonts/sora/sora-v17-latin-700.ttf` | Google Fonts (OFL) |
+| Body / interfaz | Barlow Semi Condensed 500 | `assets/fonts/barlow-semi-condensed/…500.ttf` | Google Fonts (OFL) |
+| Editorial / títulos grandes | Big Shoulders Display 700 | `assets/fonts/big-shoulders-display/bsd-700.ttf` | Google Fonts (OFL) |
+| Datos numéricos (BPM/LUFS/duración) | JetBrains Mono 400 | `assets/fonts/jetbrains-mono/…400.ttf` | Google Fonts (OFL) |
+
+Todas bajo SIL Open Font License 1.1; los pesos adicionales conservados en
+`assets/fonts/` son para uso futuro de la jerarquía tipográfica.

@@ -46,12 +46,16 @@ impl Default for Theme {
     }
 }
 
-/// Familia Display (Dela Gothic One).
+/// Familia Display — acentos de marca (Dela Gothic One, OFL).
 pub const FONT_DISPLAY: &str = "ag_display";
-/// Familia Heading (Termina 800).
+/// Familia Heading — encabezados (Sora, OFL).
 pub const FONT_HEADING: &str = "ag_heading";
-/// Familia funcional (Tusker Grotesk 1500).
+/// Familia funcional — interfaz (Barlow Semi Condensed, OFL).
 pub const FONT_BODY: &str = "ag_body";
+/// Editorial — títulos grandes (Big Shoulders Display, OFL).
+pub const FONT_EDITORIAL: &str = "ag_editorial";
+/// Datos numéricos — BPM/LUFS/duración (JetBrains Mono, OFL).
+pub const FONT_MONO: &str = "ag_mono";
 
 /// Ids tipográficos centralizados (fábrica para sustituir el diseño luego).
 pub fn font_display(size: f32) -> egui::FontId {
@@ -62,6 +66,12 @@ pub fn font_heading(size: f32) -> egui::FontId {
 }
 pub fn font_body(size: f32) -> egui::FontId {
     egui::FontId::new(size, egui::FontFamily::Name(FONT_BODY.into()))
+}
+pub fn font_editorial(size: f32) -> egui::FontId {
+    egui::FontId::new(size, egui::FontFamily::Name(FONT_EDITORIAL.into()))
+}
+pub fn font_mono(size: f32) -> egui::FontId {
+    egui::FontId::new(size, egui::FontFamily::Name(FONT_MONO.into()))
 }
 
 /// Instala fuentes y visuales. Busca assets/ junto al ejecutable y en el CWD
@@ -104,8 +114,10 @@ pub fn install(ctx: &egui::Context) {
         false
     };
     let display = install(FONT_DISPLAY, "assets/DelaGothicOne-Regular.ttf");
-    let heading = install(FONT_HEADING, "assets/termina/termina-800.ttf");
-    let body = install(FONT_BODY, "assets/tusker/TuskerGrotesk-1500Medium.ttf");
+    let heading = install(FONT_HEADING, "assets/fonts/sora/sora-v17-latin-700.ttf");
+    let body = install(FONT_BODY, "assets/fonts/barlow-semi-condensed/barlow-semi-condensed-v16-latin-500.ttf");
+    let editorial = install(FONT_EDITORIAL, "assets/fonts/big-shoulders-display/bsd-700.ttf");
+    let mono = install(FONT_MONO, "assets/fonts/jetbrains-mono/jetbrains-mono-v24-latin-400.ttf");
     if body {
         let fams = fonts
             .families
@@ -127,10 +139,24 @@ pub fn install(ctx: &egui::Context) {
             .or_default()
             .push(FONT_HEADING.to_string());
     }
+    if editorial {
+        fonts
+            .families
+            .entry(egui::FontFamily::Name(FONT_EDITORIAL.into()))
+            .or_default()
+            .push(FONT_EDITORIAL.to_string());
+    }
+    if mono {
+        // La familia Monospace de egui pasa a ser JetBrains Mono: todos los
+        // .monospace() existentes (BPM, LUFS, duración, posición) la usan.
+        fonts
+            .families
+            .insert(egui::FontFamily::Monospace, vec![FONT_MONO.to_string()]);
+    }
     ctx.set_fonts(fonts);
-    if !display || !heading || !body {
+    if !display || !heading || !body || !editorial || !mono {
         eprintln!(
-            "[fonts] AV: display={display} heading={heading} body={body} (assets/ no encontrado en algunas bases)"
+            "[fonts] AV: display={display} heading={heading} body={body} editorial={editorial} mono={mono} (assets/ no encontrado en algunas bases)"
         );
     }
 }
