@@ -115,10 +115,26 @@ pub fn read_metadata(path: &Path) -> Result<ScannedFile> {
     let year = tag.and_then(|t| t.year()).map(|y| y as i32);
     let track_no = tag.and_then(|t| t.track()).map(|n| n as i32);
 
-    // fallback de título: nombre de archivo (como MIK muestra untagged)
-    let title = title_tag.or_else(|| {
-        path.file_stem().map(|s| s.to_string_lossy().to_string())
-    });
+    // fallback: nombre de archivo → "N - Artist - Title" / "Artist - Title"
+    // (como MIK muestra pistas sin tags)
+    let mut title = title_tag;
+    let mut artist = artist;
+    if title.is_none() {
+        if let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().to_string()) {
+            let parts: Vec<&str> = stem.splitn(3, " - ").collect();
+            match parts.len() {
+                3 if parts[0].chars().next().is_some_and(|c| c.is_ascii_digit()) => {
+                    artist = artist.or_else(|| Some(parts[1].trim().to_string()));
+                    title = Some(parts[2].trim().to_string());
+                }
+                2 => {
+                    artist = artist.or_else(|| Some(parts[0].trim().to_string()));
+                    title = Some(parts[1].trim().to_string());
+                }
+                _ => title = Some(stem),
+            }
+        }
+    }
 
     let cover = tag
         .and_then(|t| {

@@ -848,6 +848,89 @@ impl SmartMixApp {
                         }
                     });
                     ui.separator();
+                    // correcciones manuales (override key/BPM + beatgrid)
+                    ui.label(egui::RichText::new(texts::t(&self.prefs.language, "detail.fix")).color(t.text_dim).small());
+                    let track_id = full.id;
+                    let cur_key = full.analysis.key_camelot.clone();
+                    let cur_bpm = full.analysis.tempo;
+                    let mut apply_key: Option<Option<String>> = None;
+                    let mut apply_bpm: Option<f64> = None;
+                    let mut do_apply = false;
+                    ui.horizontal(|ui| {
+                        let sel = cur_key.clone().unwrap_or_default();
+                        egui::ComboBox::from_id_source("ovr_key")
+                            .selected_text(if sel.is_empty() { "—".to_string() } else { sel })
+                            .width(58.0)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(cur_key.is_none(), "—").clicked() {
+                                    apply_key = Some(None);
+                                }
+                                for n in 1..=12 {
+                                    for l in ["A", "B"] {
+                                        let k = format!("{n}{l}");
+                                        if ui.selectable_label(cur_key.as_deref() == Some(k.as_str()), &k).clicked() {
+                                            apply_key = Some(Some(k));
+                                        }
+                                    }
+                                }
+                            });
+                        let mut b = cur_bpm.unwrap_or(128.0);
+                        let resp = ui.add(egui::DragValue::new(&mut b).speed(0.1).fixed_decimals(2));
+                        if resp.changed() {
+                            apply_bpm = Some(b);
+                        }
+                        if ui.button(texts::t(&self.prefs.language, "detail.apply")).clicked() {
+                            do_apply = true;
+                        }
+                    });
+                    if do_apply && (apply_key.is_some() || apply_bpm.is_some()) {
+                        if let Ok(mut db) = self.db.lock() {
+                            let _ = db.override_key_bpm(track_id, apply_key.clone().flatten().as_deref(), apply_bpm.or(cur_bpm));
+                        }
+                        let ctx2 = ui.ctx().clone();
+                        self.select(track_id, &ctx2);
+                        self.refresh();
+                    }
+                    // beatgrid: nudge + anclar al playhead
+                    if full.analysis.beatgrid.is_some() {
+                        let mut grid_action: Option<&str> = None;
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("grid:").color(t.text_dim).small());
+                            if ui.small_button("◀10ms").clicked() {
+                                grid_action = Some("left");
+                            }
+                            if ui.small_button("10ms▶").clicked() {
+                                grid_action = Some("right");
+                            }
+                            if ui.small_button("⚓ playhead").clicked() {
+                                grid_action = Some("anchor");
+                            }
+                        });
+                        if let Some(act) = grid_action {
+                            let mut a = full.analysis.clone();
+                            if let Some(bg) = a.beatgrid.as_mut() {
+                                match act {
+                                    "left" => bg.t0_s -= 0.010,
+                                    "right" => bg.t0_s += 0.010,
+                                    "anchor" => {
+                                        let ph = self.player.as_ref()
+                                            .map(|p| p.decks[self.active_deck as usize].position_s())
+                                            .unwrap_or(0.0);
+                                        let near = bg.beat_time(bg.beat_index_near(ph));
+                                        bg.t0_s += ph - near;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            if let Ok(mut db) = self.db.lock() {
+                                let _ = db.save_analysis(track_id, &a);
+                            }
+                            let ctx2 = ui.ctx().clone();
+                            self.select(track_id, &ctx2);
+                            self.refresh();
+                        }
+                    }
+                    ui.separator();
                     // waveform
                     let wave = full.analysis.waveform.clone();
                     let dur = full.analysis.duration_s.max(0.001);

@@ -1,5 +1,6 @@
 [package]
 name = "sm-app"
+authors = ["Avant Garden Music"]
 version.workspace = true
 edition.workspace = true
 
