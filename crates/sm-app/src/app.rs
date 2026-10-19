@@ -28,7 +28,8 @@ use std::sync::{Arc, Mutex};
 const ROW_H: f32 = 20.0;
 
 /// Definición ÚNICA de columnas (encabezado y filas comparten estructura).
-const COLS: [(&str, Option<SortField>); 8] = [
+const COLS: [(&str, Option<SortField>); 9] = [
+    ("", None),
     ("#", None),
     ("col.title", Some(SortField::Title)),
     ("col.artist", Some(SortField::Artist)),
@@ -125,6 +126,9 @@ pub struct SmartMixApp {
     show_prefs: bool,
     show_export: bool,
     show_new_playlist: bool,
+    /// Renombrar playlist (id en curso).
+    show_rename_playlist: bool,
+    rename_playlist_id: Option<i64>,
     show_about: bool,
     show_corrections: bool,
     auto_queue_after_scan: bool,
@@ -204,6 +208,8 @@ impl SmartMixApp {
             show_prefs: false,
             show_export: false,
             show_new_playlist: false,
+            show_rename_playlist: false,
+            rename_playlist_id: None,
             show_about: false,
             show_corrections: false,
             auto_queue_after_scan: false,
@@ -1265,11 +1271,31 @@ impl SmartMixApp {
                         let icon = if pl.kind == "smart" { "✦" } else { "≡" };
                         let txt = egui::RichText::new(format!("{icon}  {}", pl.name))
                             .color(if sel { t.accent } else { t.text });
-                        if ui.selectable_label(sel, txt).clicked() {
+                        let pl_resp = ui.selectable_label(sel, txt);
+                        if pl_resp.clicked() {
                             self.active_playlist = Some(pl.id);
                             self.collection = Collection::All;
                             self.refresh();
                         }
+                        // menú contextual: renombrar / eliminar
+                        pl_resp.context_menu(|ui| {
+                            if ui.button("Renombrar…").clicked() {
+                                self.rename_playlist_id = Some(pl.id);
+                                self.new_playlist_name = pl.name.clone();
+                                self.show_rename_playlist = true;
+                                ui.close_menu();
+                            }
+                            if ui.button("Eliminar").clicked() {
+                                if let Ok(db) = self.db.lock() {
+                                    let _ = db.delete_playlist(pl.id);
+                                }
+                                if self.active_playlist == Some(pl.id) {
+                                    self.active_playlist = None;
+                                }
+                                self.refresh();
+                                ui.close_menu();
+                            }
+                        });
                     }
                     if self.active_playlist.is_some()
                         && ui
@@ -1394,6 +1420,16 @@ impl SmartMixApp {
                 // visibilidad aproximada para el fetch inicial (evita salto)
                 self.ensure_rows((0, 60.min(self.total.max(0) as usize)));
                 let cache = Rc::new(RefCell::new(TableCache::new(self.db.clone(), self.query())));
+                // caché de miniaturas de carátula por pista (corte simple a 400)
+                let cover_cache: Rc<RefCell<std::collections::HashMap<i64, Option<egui::TextureHandle>>>> =
+                    Rc::new(RefCell::new(std::collections::HashMap::new()));
+                let cover_db = self.db.clone();
+                let cover_ctx = ui.ctx().clone();
+                // menú contextual de filas: añadir/quitar de playlist
+                let pls_snap: Vec<sm_model::Playlist> = self.playlists.clone();
+                let active_pl = self.active_playlist;
+                let pl_refresh: Rc<std::cell::Cell<bool>> = Rc::new(std::cell::Cell::new(false));
+                let pl_db = self.db.clone();
                 let table_full_rect = ui.max_rect();
                 let hover_prev = Rc::new(self.hover_row);
                 let new_hover: Rc<RefCell<Option<usize>>> = Rc::new(RefCell::new(None));
@@ -1416,6 +1452,7 @@ impl SmartMixApp {
                     .striped(true)
                     .resizable(true)
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                    .column(Column::exact(26.0))
                     .column(Column::exact(30.0))
                     .column(Column::remainder().at_least(90.0).clip(true))
                     .column(Column::initial(160.0).at_least(70.0).clip(true))
@@ -1427,6 +1464,10 @@ impl SmartMixApp {
                     .header(22.0, |mut header| {
                         for (key, sort) in COLS {
                             header.col(|ui| {
+                                if key.is_empty() {
+                                    ui.add_space(12.0);
+                                    return;
+                                }
                                 let name = if key == "#" {
                                     "#".to_string()
                                 } else {
@@ -1483,6 +1524,61 @@ let tr = cache.borrow_mut().get(i);
                             };
                             let mut any_click = false;
                             let mut dbl_click = false;
+                            // carátula (miniatura 20×20 con caché por pista)
+                            row.col(|ui| {
+                                let rid = tr.id;
+                                let tex = cover_cache.borrow().get(&rid).cloned();
+                                let tex = match tex {
+                                    Some(t) => t,
+                                    None => {
+                                        let bytes = cover_db
+                                            .lock()
+                                            .ok()
+                                            .and_then(|db| db.cover(rid).unwrap_or(None));
+                                        let loaded = bytes.and_then(|b| {
+                                            image::load_from_memory(&b).ok().map(|img| {
+                                                let rgba = img.to_rgba8();
+                                                let (w, h) = rgba.dimensions();
+                                                cover_ctx.load_texture(
+                                                    format!("thumb-{rid}"),
+                                                    egui::ColorImage::from_rgba_unmultiplied(
+                                                        [w as usize, h as usize],
+                                                        &rgba,
+                                                    ),
+                                                    egui::TextureOptions::LINEAR,
+                                                )
+                                            })
+                                        });
+                                        let mut c = cover_cache.borrow_mut();
+                                        if c.len() > 400 {
+                                            c.clear();
+                                        }
+                                        c.insert(rid, loaded.clone());
+                                        loaded
+                                    }
+                                };
+                                cell_bg(ui);
+                                match tex {
+                                    Some(tex) => {
+                                        ui.add(
+                                            egui::Image::new(egui::ImageSource::Texture(
+                                                egui::load::SizedTexture::new(
+                                                    tex.id(),
+                                                    egui::vec2(20.0, 20.0),
+                                                ),
+                                            ))
+                                            .rounding(3.0),
+                                        );
+                                    }
+                                    None => {
+                                        let (r, _) = ui.allocate_exact_size(
+                                            egui::vec2(20.0, 20.0),
+                                            Sense::hover(),
+                                        );
+                                        ui.painter().rect_filled(r, 3.0, t.surface2);
+                                    }
+                                }
+                            });
                             // #
                             row.col(|ui| {
                                 *row_y0.borrow_mut() = Some(ui.max_rect().top());
@@ -1662,6 +1758,39 @@ let tr = cache.borrow_mut().get(i);
                                     if rr.double_clicked() {
                                         dbl_click = true;
                                     }
+                                    // menú contextual de fila: playlists
+                                    rr.context_menu(|ui| {
+                                        ui.label(
+                                            egui::RichText::new("Añadir a playlist:")
+                                                .small()
+                                                .color(t.text_dim),
+                                        );
+                                        for pl in pls_snap.iter() {
+                                            if ui.button(format!("{icon} {}", pl.name, icon = if pl.kind == "smart" { "✦" } else { "≡" }))
+                                                .clicked()
+                                            {
+                                                if let Ok(db) = pl_db.lock() {
+                                                    let _ = db.add_track_to_playlist(pl.id, tr.id);
+                                                }
+                                                pl_refresh.set(true);
+                                                ui.close_menu();
+                                            }
+                                        }
+                                        if ui.button("＋ Nueva playlist…").clicked() {
+                                            ui.close_menu();
+                                        }
+                                        if let Some(ap) = active_pl {
+                                            ui.separator();
+                                            if ui.button("Quitar de esta playlist").clicked() {
+                                                if let Ok(db) = pl_db.lock() {
+                                                    let _ =
+                                                        db.remove_track_from_playlist(ap, tr.id);
+                                                }
+                                                pl_refresh.set(true);
+                                                ui.close_menu();
+                                            }
+                                        }
+                                    });
                                 }
                             });
                             if any_click {
@@ -1691,6 +1820,10 @@ let tr = cache.borrow_mut().get(i);
                 }
                 // devolver caché para el siguiente frame
                 self.hover_row = *new_hover.borrow();
+                if pl_refresh.get() {
+                    pl_refresh.set(false);
+                    self.refresh();
+                }
                 {
                     let c = cache.borrow();
                     self.rows = c.rows.clone();
@@ -1831,6 +1964,32 @@ let tr = cache.borrow_mut().get(i);
                     }
                 });
             self.show_new_playlist = open;
+        }
+        if self.show_rename_playlist {
+            let mut open = true;
+            egui::Window::new("Renombrar playlist")
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.text_edit_singleline(&mut self.new_playlist_name);
+                    ui.horizontal(|ui| {
+                        if ui.button("Guardar")
+                            .clicked()
+                            && !self.new_playlist_name.is_empty()
+                        {
+                            if let Some(pid) = self.rename_playlist_id {
+                                if let Ok(db) = self.db.lock() {
+                                    let _ = db.rename_playlist(pid, &self.new_playlist_name);
+                                }
+                            }
+                            self.refresh();
+                            self.show_rename_playlist = false;
+                        }
+                        if ui.button("Cancelar").clicked() {
+                            self.show_rename_playlist = false;
+                        }
+                    });
+                });
+            self.show_rename_playlist = open;
         }
         if self.show_export {
             let mut open = true;
