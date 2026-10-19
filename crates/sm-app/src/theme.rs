@@ -22,6 +22,8 @@ pub struct Theme {
     pub danger: Color32,
     pub deck_a: Color32,
     pub deck_b: Color32,
+    pub row_hover: Color32,
+    pub row_selected: Color32,
 }
 
 impl Default for Theme {
@@ -38,6 +40,8 @@ impl Default for Theme {
             danger: Color32::from_rgb(255, 108, 118),
             deck_a: Color32::from_rgb(185, 167, 255),
             deck_b: Color32::from_rgb(127, 212, 193),
+            row_hover: Color32::from_rgba_unmultiplied(255, 255, 255, 18),
+            row_selected: Color32::from_rgba_unmultiplied(185, 167, 255, 30),
         }
     }
 }

@@ -100,6 +100,7 @@ pub struct SmartMixApp {
     total: i64,
     rows: BTreeMap<usize, TrackRow>,
     fetched_range: (usize, usize),
+    hover_row: Option<usize>,
     selected_id: Option<i64>,
     detail: Option<sm_db::TrackFull>,
     cover_tex: Option<egui::TextureHandle>,
@@ -180,6 +181,7 @@ impl SmartMixApp {
             total: 0,
             rows: BTreeMap::new(),
             fetched_range: (0, 0),
+            hover_row: None,
             selected_id: None,
             detail: None,
             cover_tex: None,
@@ -1103,6 +1105,8 @@ impl SmartMixApp {
                 // visibilidad aproximada para el fetch inicial (evita salto)
                 self.ensure_rows((0, 60.min(self.total.max(0) as usize)));
                 let cache = Rc::new(RefCell::new(TableCache::new(self.db.clone(), self.query())));
+                let hover_prev = Rc::new(self.hover_row);
+                let new_hover: Rc<RefCell<Option<usize>>> = Rc::new(RefCell::new(None));
                 // siembra la caché con lo ya traído
                 {
                     let mut c = cache.borrow_mut();
@@ -1170,10 +1174,27 @@ let tr = cache.borrow_mut().get(i);
                                 return;
                             };
                             let selected = Some(tr.id) == sel_id;
+                            let row_hov = *hover_prev == Some(i);
+                            let cell_bg = |ui: &mut egui::Ui| {
+                                if row_hov {
+                                    ui.painter().rect_filled(
+                                        ui.max_rect(),
+                                        0.0,
+                                        t.row_hover,
+                                    );
+                                } else if selected {
+                                    ui.painter().rect_filled(
+                                        ui.max_rect(),
+                                        0.0,
+                                        t.row_selected,
+                                    );
+                                }
+                            };
                             let mut any_click = false;
                             let mut dbl_click = false;
                             // #
                             row.col(|ui| {
+                                cell_bg(ui);
                                 let resp = ui
                                     .add(
                                         egui::Label::new(
@@ -1185,9 +1206,13 @@ let tr = cache.borrow_mut().get(i);
                                     )
                                     .interact(egui::Sense::click());
                                 any_click |= resp.clicked();
+                                if resp.hovered() {
+                                    *new_hover.borrow_mut() = Some(i);
+                                }
                             });
                             // título
                             row.col(|ui| {
+                                cell_bg(ui);
                                 let base = egui::RichText::new(tr.title.clone())
                                     .color(if selected { t.accent } else { t.text });
                                 let base = if selected { base.strong() } else { base };
@@ -1201,6 +1226,9 @@ let tr = cache.borrow_mut().get(i);
                                 );
                                 any_click |= resp.clicked();
                                 dbl_click |= resp.double_clicked();
+                                if resp.hovered() {
+                                    *new_hover.borrow_mut() = Some(i);
+                                }
                             });
                             // artista / álbum
                             for txt in [&tr.artist, &tr.album] {
@@ -1208,6 +1236,7 @@ let tr = cache.borrow_mut().get(i);
                                 let mut hit = false;
                                 let mut dbl2 = false;
                                 row.col(|ui| {
+                                    cell_bg(ui);
                                     let btn = egui::Button::new(rt.clone())
                                         .fill(Color32::TRANSPARENT)
                                         .small()
@@ -1218,6 +1247,9 @@ let tr = cache.borrow_mut().get(i);
                                     );
                                     hit = resp.clicked();
                                     dbl2 |= resp.double_clicked();
+                                    if resp.hovered() {
+                                        *new_hover.borrow_mut() = Some(i);
+                                    }
                                 });
                                 any_click |= hit;
                                 dbl_click |= dbl2;
@@ -1225,6 +1257,7 @@ let tr = cache.borrow_mut().get(i);
                             // tonalidad (chip)
                             let key_clicked = Rc::new(RefCell::new(false));
                             row.col(|ui| {
+                                cell_bg(ui);
                                 if tr.key_camelot.is_some() {
                                     let r = ui.available_rect_before_wrap();
                                     let rr = egui::Rect::from_center_size(
@@ -1245,12 +1278,16 @@ let tr = cache.borrow_mut().get(i);
                                         Color32::BLACK,
                                     );
                                     *key_clicked.borrow_mut() = resp.clicked();
+                                    if resp.hovered() {
+                                        *new_hover.borrow_mut() = Some(i);
+                                    }
                                 }
                             });
                             any_click |= *key_clicked.borrow();
                             // bpm (derecha)
                             let bpm_clicked = Rc::new(RefCell::new(false));
                             row.col(|ui| {
+                                cell_bg(ui);
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
@@ -1261,6 +1298,9 @@ let tr = cache.borrow_mut().get(i);
                                                     .color(t.text),
                                             );
                                             *bpm_clicked.borrow_mut() = resp.clicked();
+                                            if resp.hovered() {
+                                                *new_hover.borrow_mut() = Some(i);
+                                            }
                                         }
                                     },
                                 );
@@ -1269,6 +1309,7 @@ let tr = cache.borrow_mut().get(i);
                             // energía (barra)
                             let en_clicked = Rc::new(RefCell::new(false));
                             row.col(|ui| {
+                                cell_bg(ui);
                                 if let Some(e) = tr.energy {
                                     let r = ui.available_rect_before_wrap();
                                     let bar = egui::Rect::from_center_size(
@@ -1282,20 +1323,27 @@ let tr = cache.borrow_mut().get(i);
                                     fill.set_width(bar.width() * frac as f32);
                                     ui.painter().rect_filled(fill, 3.0, energy_color(e));
                                     *en_clicked.borrow_mut() = resp.clicked();
+                                    if resp.hovered() {
+                                        *new_hover.borrow_mut() = Some(i);
+                                    }
                                 }
                             });
                             any_click |= *en_clicked.borrow();
                             // duración (derecha)
                             row.col(|ui| {
+                                cell_bg(ui);
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
                                         if tr.duration_s > 0.0 {
-                                            ui.label(
+                                            let resp = ui.label(
                                                 egui::RichText::new(fmt_time(tr.duration_s))
                                                     .monospace()
                                                     .color(t.text_dim),
                                             );
+                                            if resp.hovered() {
+                                                *new_hover.borrow_mut() = Some(i);
+                                            }
                                         }
                                     },
                                 );
@@ -1326,6 +1374,7 @@ let tr = cache.borrow_mut().get(i);
                     self.deck_play(self.active_deck);
                 }
                 // devolver caché para el siguiente frame
+                self.hover_row = *new_hover.borrow();
                 {
                     let c = cache.borrow();
                     self.rows = c.rows.clone();
