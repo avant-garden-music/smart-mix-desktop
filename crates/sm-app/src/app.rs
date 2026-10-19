@@ -92,7 +92,7 @@ impl SmartMixApp {
             prefs.analysis_workers.max(1).min(16),
             repaint.clone(),
         );
-        let app = SmartMixApp {
+        let mut app = SmartMixApp {
             db,
             player,
             models,
@@ -126,6 +126,7 @@ impl SmartMixApp {
             deck_b_visible: true,
             active_deck: 0,
         };
+        app.refresh();
         Ok(app)
     }
 

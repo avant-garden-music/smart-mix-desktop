@@ -18,3 +18,4 @@ desktop.ini
 !.gitkeep
 corpus/
 ground-truth-audio/
+dist/
