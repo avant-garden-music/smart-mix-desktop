@@ -1105,8 +1105,10 @@ impl SmartMixApp {
                 // visibilidad aproximada para el fetch inicial (evita salto)
                 self.ensure_rows((0, 60.min(self.total.max(0) as usize)));
                 let cache = Rc::new(RefCell::new(TableCache::new(self.db.clone(), self.query())));
+                let table_full_rect = ui.max_rect();
                 let hover_prev = Rc::new(self.hover_row);
                 let new_hover: Rc<RefCell<Option<usize>>> = Rc::new(RefCell::new(None));
+                let row_y0: Rc<RefCell<Option<f32>>> = Rc::new(RefCell::new(None));
                 // siembra la caché con lo ya traído
                 {
                     let mut c = cache.borrow_mut();
@@ -1194,6 +1196,7 @@ let tr = cache.borrow_mut().get(i);
                             let mut dbl_click = false;
                             // #
                             row.col(|ui| {
+                                *row_y0.borrow_mut() = Some(ui.max_rect().top());
                                 cell_bg(ui);
                                 let resp = ui
                                     .add(
@@ -1347,6 +1350,30 @@ let tr = cache.borrow_mut().get(i);
                                         }
                                     },
                                 );
+                                // FILA COMPLETA: ui.interact sobre el rect de toda
+                                // la fila (ancho del panel) — clic y doble clic en
+                                // cualquier parte de la fila.
+                                if let Some(y0) = *row_y0.borrow() {
+                                    let row_rect = egui::Rect::from_min_max(
+                                        egui::pos2(table_full_rect.left(), y0),
+                                        egui::pos2(table_full_rect.right(), y0 + ROW_H),
+                                    );
+                                    let rid = egui::Id::new("tbl-row").with(i);
+                                    let rr = ui.interact(
+                                        row_rect,
+                                        rid,
+                                        egui::Sense::click(),
+                                    );
+                                    if rr.hovered() {
+                                        *new_hover.borrow_mut() = Some(i);
+                                    }
+                                    if rr.clicked() {
+                                        any_click = true;
+                                    }
+                                    if rr.double_clicked() {
+                                        dbl_click = true;
+                                    }
+                                }
                             });
                             if any_click {
                                 *clicked.borrow_mut() = Some(tr.id);
