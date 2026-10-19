@@ -475,6 +475,7 @@ impl eframe::App for SmartMixApp {
         }
         self.top_bar(ctx);
         self.now_playing(ctx);
+        self.decks_strip(ctx);
         self.side_panel(ctx);
         self.status_bar(ctx);
         self.central_table(ctx);
@@ -996,6 +997,218 @@ impl SmartMixApp {
                             db.replace_cues(full.id, &cues2).ok();
                         }
                         self.load_detail(full.id);
+                    }
+                });
+            });
+    }
+
+    /// Tira de decks Pro: A y B siempre visibles con transporte propio,
+    /// SYNC de BPM (via pitch), pitch con lectura % y vol por deck.
+    fn decks_strip(&mut self, ctx: &egui::Context) {
+        use sm_audio::DeckHandle;
+        let t = Theme::default();
+        let decks: Vec<DeckHandle> = self
+            .player()
+            .map(|p| p.decks.to_vec())
+            .unwrap_or_default();
+        if decks.is_empty() {
+            return;
+        }
+        let db = self.db.clone();
+        // estado de decks 1/s (verificación sin visión)
+        {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static LAST: AtomicU64 = AtomicU64::new(0);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+            let any_playing = decks.iter().any(|d| d.is_playing());
+            if any_playing && now - LAST.load(Ordering::Relaxed) > 1000 {
+                LAST.store(now, Ordering::Relaxed);
+                for (i, d) in decks.iter().enumerate() {
+                    eprintln!(
+                        "[decks] {} title={:?} pos={:.2}/{:.2} playing={} pitch={:+.2}st",
+                        if i == 0 { 'A' } else { 'B' },
+                        d.title(),
+                        d.position_s(),
+                        d.duration_s(),
+                        d.is_playing(),
+                        d.pitch()
+                    );
+                }
+            }
+        }
+        egui::TopBottomPanel::top("decks")
+            .frame(
+                egui::Frame::none()
+                    .fill(t.bg)
+                    .inner_margin(egui::Margin::symmetric(10.0, 4.0)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    for i in 0..2usize {
+                        let d = &decks[i];
+                        let col = if i == 0 { t.deck_a } else { t.deck_b };
+                        let active = self.active_deck == i;
+                        let loaded = d.is_loaded();
+                        let playing = loaded && d.is_playing();
+                        egui::Frame::none()
+                            .fill(if active {
+                                Color32::from_rgba_premultiplied(col.r(), col.g(), col.b(), 24)
+                            } else {
+                                t.surface
+                            })
+                            .stroke(egui::Stroke::new(1.0, if active { col } else { t.border }))
+                            .rounding(4.0)
+                            .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                            .show(ui, |ui| {
+                                ui.set_width(430.0);
+                                ui.horizontal_centered(|ui| {
+                                    // pill nombre: activa el deck
+                                    let pill = egui::Button::new(
+                                        egui::RichText::new(if i == 0 { "A" } else { "B" })
+                                            .strong()
+                                            .color(col),
+                                    )
+                                    .small()
+                                    .fill(if active {
+                                        Color32::from_rgba_premultiplied(
+                                            col.r(), col.g(), col.b(), 40,
+                                        )
+                                    } else {
+                                        t.surface2
+                                    });
+                                    if ui.add(pill).clicked() {
+                                        self.active_deck = i;
+                                    }
+                                    // título truncado en caja de ancho fijo
+                                    let title = d.title();
+                                    let tl = ui.add_sized(
+                                        [140.0, 15.0],
+                                        egui::Label::new(if loaded { &title } else { "— vacío —" })
+                                            .truncate(true)
+                                            .selectable(false),
+                                    );
+                                    tl.on_hover_text(if loaded { &title } else { "deck vacío" });
+                                    // pos / dur (JetBrains Mono)
+                                    if loaded {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{} / {}",
+                                                fmt_time(d.position_s()),
+                                                fmt_time(d.duration_s())
+                                            ))
+                                            .monospace()
+                                            .small()
+                                            .color(t.text_dim),
+                                        );
+                                    }
+                                    // transporte
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new(if playing { "⏸" } else { "▶" })
+                                                    .strong(),
+                                            )
+                                            .small(),
+                                        )
+                                        .clicked()
+                                    {
+                                        eprintln!("[deck{}] play/pause (loaded={loaded}, playing={playing})", i);
+                                        if playing {
+                                            d.pause();
+                                        } else if loaded {
+                                            d.play();
+                                        }
+                                    }
+                                    if ui.add(egui::Button::new("■").small()).clicked() {
+                                        d.stop();
+                                    }
+                                    // cargar pista seleccionada (sin reproducir)
+                                    let eject = ui.add(egui::Button::new("⏏").small());
+                                    if eject.clicked() {
+                                        eprintln!("[deck{}] eject pulsado", i);
+                                        if let Some(full) = &self.detail {
+                                            let path = full.meta.path.clone();
+                                            d.load(&path);
+                                            self.deck_track_id[i] = self.selected_id;
+                                            self.status_msg = format!(
+                                                "Deck {}: {} cargado",
+                                                if i == 0 { "A" } else { "B" },
+                                                full.meta.title
+                                            );
+                                        }
+                                    }
+                                    // SYNC: igualar BPM al otro deck via pitch
+                                    let other = 1 - i;
+                                    let other_loaded = decks[other].is_loaded();
+                                    let sync_txt = egui::RichText::new("SYNC")
+                                        .small()
+                                        .color(if other_loaded { col } else { t.text_dim });
+                                    if ui
+                                        .add_enabled(other_loaded, egui::Button::new(sync_txt).small())
+                                        .clicked()
+                                    {
+                                        eprintln!("[deck{}] SYNC pulsado", i);
+                                        let bpm_of = |id: Option<i64>| -> Option<f64> {
+                                            id.and_then(|id| {
+                                                db.lock().ok().and_then(|db| {
+                                                    db.track_full(id).ok().flatten()
+                                                })
+                                            })
+                                            .and_then(|f| f.analysis.tempo)
+                                        };
+                                        let bo = bpm_of(self.deck_track_id[other]);
+                                        let bm = bpm_of(self.deck_track_id[i]);
+                                        if let (Some(bo), Some(bm)) = (bo, bm) {
+                                            if bm > 1.0 {
+                                                let semis = (12.0 * (bo / bm).log2()).clamp(-12.0, 12.0);
+                                                *d.current().pitch_semis.write() = semis as f32;
+                                                self.status_msg = if semis.abs() >= 12.0 {
+                                                    format!("SYNC {}→{:.2} BPM limitado a {:+.2} st", bm, bo, semis)
+                                                } else {
+                                                    format!("SYNC {}→{:.2} BPM ({:+.2} st)", bm, bo, semis)
+                                                };
+                                            }
+                                        }
+                                    }
+                                    // pitch: slider + lectura % + doble clic reset
+                                    let mut pitch = d.pitch();
+                                    let resp = ui.add(
+                                        egui::Slider::new(&mut pitch, -12.0..=12.0)
+                                            .show_value(false)
+                                            .clamp_to_range(false),
+                                    );
+                                    if resp.changed() {
+                                        *d.current().pitch_semis.write() = pitch;
+                                    }
+                                    if resp.double_clicked() {
+                                        *d.current().pitch_semis.write() = 0.0;
+                                    }
+                                    let pct = (2f32.powf(pitch / 12.0) - 1.0) * 100.0;
+                                    ui.label(
+                                        egui::RichText::new(format!("{pct:+.1}%"))
+                                            .monospace()
+                                            .small()
+                                            .color(if pitch.abs() > 0.01 { t.accent } else { t.text_dim }),
+                                    );
+                                    // volumen por deck
+                                    let mut vol = d.volume();
+                                    if ui
+                                        .add(
+                                            egui::Slider::new(&mut vol, 0.0..=1.5)
+                                                .show_value(false),
+                                        )
+                                        .changed()
+                                    {
+                                        *d.current().volume.write() = vol;
+                                    }
+                                });
+                            });
+                        if i == 0 {
+                            ui.separator();
+                        }
                     }
                 });
             });
@@ -1963,4 +2176,20 @@ fn fmt_time(s: f64) -> String {
     let m = (s / 60.0).floor() as i64;
     let sec = (s - m as f64 * 60.0) as i64;
     format!("{m}:{sec:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sync_bpm_semitonos() {
+        // misma fórmula del botón SYNC: 12·log2(bpm_objetivo/bpm_actual)
+        let semis = |bo: f64, bm: f64| (12.0 * (bo / bm).log2()).clamp(-12.0, 12.0);
+        assert!(semis(120.0, 120.0).abs() < 1e-9);
+        // una octava = +12 st (limitado)
+        assert_eq!(semis(240.0, 120.0), 12.0);
+        // +5.946% ≈ +1 semitono
+        assert!((semis(127.14, 120.0) - 1.0).abs() < 0.01);
+        // doble bajada
+        assert!((semis(60.0, 120.0) + 12.0).abs() < 1e-9);
+    }
 }
