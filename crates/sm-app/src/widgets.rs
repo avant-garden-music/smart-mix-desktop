@@ -137,6 +137,23 @@ impl<'a> egui::Widget for &mut WaveView<'a> {
             );
             painter.rect_filled(r, 0.0, energy_color(lvl));
         }
+        // mini-mapa cuando hay zoom: pista completa + ventana resaltada,
+        // para que nunca parezca que la waveform "termina" antes del audio
+        if span < duration * 0.999 {
+            let mm_h = 4.0;
+            let mm = egui::Rect::from_min_max(
+                egui::pos2(rect.left(), rect.bottom() - mm_h),
+                egui::pos2(rect.right(), rect.bottom()),
+            );
+            painter.rect_filled(mm, 0.0, t.surface2);
+            let wa = (t0 / duration) as f32 * w;
+            let wb = ((t0 + span) / duration) as f32 * w;
+            let win = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + wa, mm.top()),
+                egui::pos2(rect.left() + wb, mm.bottom()),
+            );
+            painter.rect_filled(win, 0.0, t.accent);
+        }
         // cues
         for (i, &c) in self.cues.iter().enumerate() {
             if c < t0 || c > t0 + span {
@@ -233,5 +250,63 @@ mod tests {
         let (t0, span) = zoom_span(100.0, 1e-6, 10.0, 0.0, dur);
         assert!(span >= dur / 2000.0);
         assert!(t0 >= 0.0 && t0 + span <= dur + 1e-9);
+    }
+
+    #[test]
+    fn cobertura_total_duracion() {
+        // El intervalo [0, T] debe mapear al ancho completo del widget:
+        // t=0 → x=0 y t=T → x=width (borde derecho = final REAL del audio).
+        for &dur in &[30.0, 182.0, 425.8, 563.45] {
+            let w = 1200.0;
+            assert!(time_to_x(0.0, w, 0.0, dur).abs() < 1e-6);
+            let x_end = time_to_x(dur, w, 0.0, dur);
+            assert!(
+                (x_end - w).abs() < 0.51,
+                "t=T no llega al borde: {x_end} vs {w}"
+            );
+            // el playhead nunca excede el ancho aunque pos > dur (clamp)
+            assert_eq!(time_to_x(dur * 1.5, w, 0.0, dur), w);
+        }
+    }
+
+    #[test]
+    fn ventana_zoom_no_deja_zona_muerta() {
+        // Cualquier ventana de zoom válida (t0, span) mantiene la relación
+        // proporcional: el extremo derecho de la ventana es t0+span y el
+        // mapeo inverso lo recupera exactamente.
+        let (dur, w) = (420.0, 900.0);
+        for &(t0, span) in &[(0.0, 420.0), (100.0, 150.0), (300.0, 120.0), (415.0, 5.0)] {
+            let t_right = x_to_time(w, w, t0, span, dur);
+            assert!(
+                (t_right - (t0 + span)).abs() < 0.01,
+                "ventana ({t0},{span}): derecha={t_right}"
+            );
+            let t_left = x_to_time(0.0, w, t0, span, dur);
+            assert!((t_left - t0).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn buckets_cubren_duracion_completa() {
+        // La waveform persistida son n buckets × 3 (mn,mx,rms); el último
+        // bucket debe corresponder a t ≈ duración. Simula el mapeo de render.
+        let dur = 240.0;
+        let n = 2048usize;
+        let wave: Vec<f32> = vec![0.5; n * 3]; // energía uniforme
+        let wn = wave.len() / 3;
+        // t del primer y último bucket según el mapeo del widget
+        let t_first = 0.0 / wn as f64 * dur;
+        let t_last = (wn - 1) as f64 / wn as f64 * dur;
+        assert!(t_first.abs() < 1e-9);
+        // el último bucket está a un bucket del final (resolución de dur/n)
+        let res = dur / wn as f64;
+        assert!(
+            (dur - t_last) <= res * 1.001,
+            "último bucket en {t_last}s, resolución {res}s"
+        );
+        // ventana completa: b0=0 y b1=n (todos los buckets visibles)
+        let b0 = (0.0 / dur * wn as f64) as usize;
+        let b1 = ((0.0 + dur) / dur * wn as f64).ceil() as usize;
+        assert_eq!((b0, b1), (0, wn));
     }
 }

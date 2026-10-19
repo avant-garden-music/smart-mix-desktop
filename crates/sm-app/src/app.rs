@@ -113,6 +113,9 @@ pub struct SmartMixApp {
     active_deck: usize,
     deck_track_id: [Option<i64>; 2],
     wave_zoom: (f64, f64),
+    /// Pista a la que pertenece `wave_zoom` — al cambiar de pista el zoom se
+    /// resetea a ventana completa (evita heredar la ventana de la anterior).
+    wave_zoom_track: Option<i64>,
     // usb
     usb_drives: Vec<UsbDrive>,
     usb_expanded: HashMap<String, bool>,
@@ -193,6 +196,7 @@ impl SmartMixApp {
             active_deck: 0,
             deck_track_id: [None, None],
             wave_zoom: (0.0, 0.0),
+            wave_zoom_track: None,
             usb_drives: Vec::new(),
             usb_expanded: HashMap::new(),
             usb_crate_view: None,
@@ -763,11 +767,32 @@ impl SmartMixApp {
                         }
                         // métricas (de derecha a izquierda: dur, LUFS… al final key)
                         ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new(fmt_time(duration))
-                                    .monospace()
-                                    .color(t.text_dim),
-                            );
+                            // posición / duración del deck activo (verificable)
+                            if track_loaded {
+                                if let Some(p) = pos {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} / {}",
+                                            fmt_time(p),
+                                            fmt_time(duration)
+                                        ))
+                                        .monospace()
+                                        .color(t.text),
+                                    );
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new(fmt_time(duration))
+                                            .monospace()
+                                            .color(t.text_dim),
+                                    );
+                                }
+                            } else {
+                                ui.label(
+                                    egui::RichText::new(fmt_time(duration))
+                                        .monospace()
+                                        .color(t.text_dim),
+                                );
+                            }
                             if let Some(v) = full.analysis.volume_db {
                                 ui.label(
                                     egui::RichText::new(format!("{v:+.1} dB"))
@@ -828,6 +853,12 @@ impl SmartMixApp {
                 let cues: Vec<f64> = full.analysis.cues.iter().map(|c| c.time_s).collect();
                 let segs = full.analysis.segments.clone();
                 let mut seek_tx: Option<f64> = None;
+                // zoom ligado a la pista: la primera vez que se muestra (o tras
+                // cambiar de pista) la ventana es la duración completa
+                if self.wave_zoom_track != self.selected_id {
+                    self.wave_zoom = (0.0, duration.max(0.001));
+                    self.wave_zoom_track = self.selected_id;
+                }
                 let zoom = &mut self.wave_zoom;
                 ui.add(&mut WaveView {
                     zoom,
