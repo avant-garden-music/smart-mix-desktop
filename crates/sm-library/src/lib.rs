@@ -46,6 +46,11 @@ pub fn scan_root(root: &Path) -> Vec<PathBuf> {
         if !entry.file_type().is_file() {
             continue;
         }
+        // resource forks de macOS (._foo.mp3): no son audio real
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with("._") || name == ".DS_Store" {
+            continue;
+        }
         let ext_match = entry
             .path()
             .extension()

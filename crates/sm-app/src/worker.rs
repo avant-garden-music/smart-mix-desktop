@@ -39,7 +39,7 @@ impl AnalysisPool {
         db: Arc<Mutex<LibraryDb>>,
         models: Arc<Models>,
         workers: usize,
-        repaint: Box<dyn Fn() + Send + Sync>,
+        repaint: Arc<dyn Fn() + Send + Sync>,
     ) -> AnalysisPool {
         let state = Arc::new(Mutex::new(QueueState {
             queue: VecDeque::new(),

@@ -47,6 +47,7 @@ pub struct SmartMixApp {
     show_export: bool,
     show_new_playlist: bool,
     show_about: bool,
+    auto_queue_after_scan: bool,
     new_playlist_name: String,
     new_playlist_smart: bool,
     export_log: String,
@@ -79,14 +80,7 @@ impl SmartMixApp {
         if player.is_none() {
             tracing::error!("no se pudo abrir el dispositivo de audio");
         }
-        let mut prefs: Preferences = {
-            let dbg = db.get_setting("preferences");
-            match dbg {
-                Some(js) => serde_json::from_str(&js).unwrap_or_default(),
-                None => Preferences::default(),
-            }
-        };
-        let _ = &mut prefs;
+        let mut prefs: Preferences = db.get_preferences().unwrap_or_default();
         let db = Arc::new(Mutex::new(db));
         let ctx = cc.egui_ctx.clone();
         let repaint_ctx = ctx.clone();
@@ -96,10 +90,7 @@ impl SmartMixApp {
             db.clone(),
             models.clone(),
             prefs.analysis_workers.max(1).min(16),
-            Box::new({
-                let r = repaint.clone();
-                move || r()
-            }),
+            repaint.clone(),
         );
         let app = SmartMixApp {
             db,
@@ -124,6 +115,7 @@ impl SmartMixApp {
             show_export: false,
             show_new_playlist: false,
             show_about: false,
+            auto_queue_after_scan: false,
             new_playlist_name: String::new(),
             new_playlist_smart: false,
             export_log: String::new(),
@@ -278,7 +270,9 @@ impl SmartMixApp {
                 }
                 *b = true;
             }
-            let analyze_on_import = self.prefs.analyze_on_import;
+            if self.prefs.analyze_on_import {
+                self.auto_queue_after_scan = true;
+            }
             std::thread::spawn(move || {
                 let files = scan_root(&folder);
                 found.store(files.len() as u64, Ordering::Relaxed);
@@ -291,31 +285,23 @@ impl SmartMixApp {
                         Ok(scanned) => {
                             if let Ok(mut db) = db.lock() {
                                 match db.upsert_track(&scanned.meta) {
-                                    Ok(id) => new_ids.push((id, scanned.meta.path.clone())),
+                                    Ok(id) => {
+                                        if let Some(cover) = scanned.cover {
+                                            let _ = db.set_cover(id, Some(cover));
+                                        }
+                                        new_ids.push((id, scanned.meta.path.clone()));
+                                    }
                                     Err(e) => tracing::warn!("upsert {}: {e}", f.display()),
-                                }
-                                if let Some(cover) = scanned.cover {
-                                    let _ = db.set_cover(id_last(&db), Some(cover));
                                 }
                             }
                         }
                         Err(e) => tracing::warn!("meta {}: {e}", f.display()),
                     }
                 }
-                if analyze_on_import {
-                    if let Ok(db) = db.lock() {
-                        let pending = db
-                            .track_ids_by_status(AnalysisStatus::Pending, 1_000_000)
-                            .unwrap_or_default();
-                        drop(db);
-                        queue_all(&pending);
-                    }
-                }
                 let _ = new_ids;
                 *busy.lock().unwrap() = false;
                 repaint();
             });
-            // cola global accesible: guardamos canal
         }
     }
 
@@ -373,14 +359,7 @@ impl SmartMixApp {
     }
 }
 
-// helpers para import (se registran fuera por borrow rules)
-fn id_last(db: &LibraryDb) -> i64 {
-    db.last_insert_id()
-}
-
-fn queue_all(_pending: &[(i64, String)]) {
-    // la cola se llena desde update() al terminar el escaneo
-}
+// (helpers de import movidos inline)
 
 impl eframe::App for SmartMixApp {
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
@@ -395,6 +374,12 @@ impl eframe::App for SmartMixApp {
         self.drain_events();
         if self.pool.is_busy() || *self.scan_busy.lock().unwrap() {
             ctx.request_repaint();
+        }
+        // tras un escaneo con análisis automático
+        if self.auto_queue_after_scan && !*self.scan_busy.lock().unwrap() {
+            self.auto_queue_after_scan = false;
+            self.refresh();
+            self.analyze_pending();
         }
         self.top_bar(ctx);
         self.side_panel(ctx);
@@ -564,7 +549,7 @@ impl SmartMixApp {
         if let Some(id) = self.selected_id {
             if let Ok(db) = self.db.lock() {
                 if let Some(full) = db.track_full(id).unwrap_or(None) {
-                    if full.analysis.analysis_ms != self.detail.as_ref().map(|d| d.analysis.analysis_ms) {
+                    if full.analysis.analysis_ms != self.detail.as_ref().map(|d| d.analysis.analysis_ms).flatten() {
                         let v = self.detail_version;
                         self.detail = Some(full);
                         self.detail_version = v + 1;
@@ -590,7 +575,7 @@ impl SmartMixApp {
                 ui.style_mut().wrap = Some(false);
                 for (name, w, sort) in hdr {
                     let label = texts::t(&self.prefs.language, &format!("col.{name}"));
-                    let mut btn = egui::Button::new(
+                    let btn = egui::Button::new(
                         egui::RichText::new(label).color(t.text_dim).small(),
                     )
                     .small();
@@ -605,8 +590,6 @@ impl SmartMixApp {
                             self.refresh();
                         }
                     }
-                    btn = btn;
-                    let _ = &mut btn;
                 }
             });
             ui.add_space(2.0);
@@ -638,9 +621,9 @@ impl SmartMixApp {
                         }
                         let cy = rect.center().y;
                         let mut cx = rect.left();
-                        let mut put = |dx: f32, txt: String, color: Color32, mono: bool| {
+                        let put = |x: f32, txt: String, color: Color32, mono: bool| {
                             painter.text(
-                                egui::pos2(cx + dx, cy),
+                                egui::pos2(x, cy),
                                 egui::Align2::LEFT_CENTER,
                                 txt,
                                 if mono {
@@ -651,7 +634,7 @@ impl SmartMixApp {
                                 color,
                             );
                         };
-                        put(6.0, format!("{}", i + 1), t.text_dim, true);
+                        put(cx + 6.0, format!("{}", i + 1), t.text_dim, true);
                         cx += 26.0;
                         // title
                         let title = if row.title.is_empty() {
@@ -700,7 +683,7 @@ impl SmartMixApp {
                         }
                         cx += 44.0;
                         if let Some(b) = row.bpm {
-                            put(6.0, format!("{b:.2}"), t.text, true);
+                            put(cx + 6.0, format!("{b:.2}"), t.text, true);
                         }
                         cx += 56.0;
                         if let Some(e) = row.energy {
@@ -713,11 +696,11 @@ impl SmartMixApp {
                             let mut fill = r;
                             fill.set_width(38.0 * frac as f32);
                             painter.rect_filled(fill, 4.0, energy_color(e));
-                            put(46.0, format!("{}", e.round() as i64), t.text_dim, true);
+                            put(cx + 46.0, format!("{}", e.round() as i64), t.text_dim, true);
                         }
                         cx += 58.0;
                         if row.duration_s > 0.0 {
-                            put(6.0, fmt_time(row.duration_s), t.text_dim, true);
+                            put(cx + 6.0, fmt_time(row.duration_s), t.text_dim, true);
                         }
                         if resp.clicked() {
                             self.selected_id = Some(row.id);
@@ -765,7 +748,9 @@ impl SmartMixApp {
             .show(ctx, |ui| {
                 let t = Theme::default();
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    let Some(full) = &self.detail else { return };
+                    // clon local: el panel necesita &mut self (select/status)
+                    let Some(full) = self.detail.clone() else { return };
+                    let full = &full;
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.label(
@@ -786,7 +771,7 @@ impl SmartMixApp {
                     );
                     ui.add_space(6.0);
                     if let Some(tex) = &self.cover_tex {
-                        ui.image(tex.texture_id(), egui::vec2(160.0, 160.0));
+                        ui.add(egui::Image::new(egui::ImageSource::Texture(egui::load::SizedTexture::new(tex.id(), egui::vec2(160.0, 160.0)))));
                     }
                     ui.add_space(6.0);
                     // métricas
@@ -1000,7 +985,7 @@ impl SmartMixApp {
     fn player_bar(&mut self, ctx: &egui::Context) {
         let t = Theme::default();
         egui::TopBottomPanel::bottom("player")
-            .frame(egui::Frame::none().fill(t.surface).inner_margin(egui::Margin::symmetric(10, 6)))
+            .frame(egui::Frame::none().fill(t.surface).inner_margin(egui::Margin::symmetric(10.0, 6.0)))
             .show(ctx, |ui| {
                 let decks: &[bool] = &[true, self.deck_b_visible];
                 ui.horizontal(|ui| {
@@ -1119,7 +1104,7 @@ impl SmartMixApp {
     fn status_bar(&mut self, ctx: &egui::Context) {
         let t = Theme::default();
         egui::TopBottomPanel::bottom("status")
-            .frame(egui::Frame::none().fill(t.bg).inner_margin(egui::Margin::symmetric(10, 3)))
+            .frame(egui::Frame::none().fill(t.bg).inner_margin(egui::Margin::symmetric(10.0, 3.0)))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let qs = self.pool.state.lock().unwrap();
@@ -1216,13 +1201,13 @@ impl SmartMixApp {
                             };
                             let kind = if self.new_playlist_smart { "smart" } else { "manual" };
                             if let Ok(mut db) = self.db.lock() {
-                                if let Ok(id) =
+                                if let Ok(pl) =
                                     db.create_playlist(&self.new_playlist_name, kind, filter.as_ref())
                                 {
                                     // playlist manual: añadir la selección actual
                                     if kind == "manual" {
                                         if let Some(sid) = self.selected_id {
-                                            db.add_track_to_playlist(id, sid).ok();
+                                            db.add_track_to_playlist(pl.id, sid).ok();
                                         }
                                     }
                                 }
@@ -1293,26 +1278,57 @@ impl SmartMixApp {
         q.limit = self.total as usize;
         q.offset = 0;
         let Ok(rows) = db.query(&q) else { return "error query".into() };
-        let mut entries = Vec::new();
+        // datos owned (los ExportEntry toman referencias)
+        struct Own {
+            path: String,
+            title: String,
+            artist: String,
+            album: String,
+            genre: String,
+            bpm: Option<f64>,
+            key_camelot: Option<String>,
+            key_name: Option<String>,
+            energy: Option<f64>,
+            duration_s: f64,
+            cues: Vec<sm_model::CuePoint>,
+            beatgrid: Option<sm_model::BeatGrid>,
+        }
+        let mut own: Vec<Own> = Vec::new();
         for r in &rows {
-            let full = db.track_full(r.id).unwrap_or(None);
-            if let Some(f) = full {
-                entries.push(ExportEntry {
-                    path: &f.meta.path,
-                    title: &f.meta.title,
-                    artist: &f.meta.artist,
-                    album: &f.meta.album,
-                    genre: &f.meta.genre,
+            if let Some(f) = db.track_full(r.id).unwrap_or(None) {
+                own.push(Own {
+                    path: f.meta.path.clone(),
+                    title: f.meta.title.clone(),
+                    artist: f.meta.artist.clone(),
+                    album: f.meta.album.clone(),
+                    genre: f.meta.genre.clone(),
                     bpm: f.analysis.tempo,
-                    key_camelot: f.analysis.key_camelot.as_deref(),
-                    key_name: f.analysis.key_name.as_deref(),
+                    key_camelot: f.analysis.key_camelot.clone(),
+                    key_name: f.analysis.key_name.clone(),
                     energy: f.analysis.energy,
                     duration_s: f.analysis.duration_s,
-                    cues: &f.analysis.cues,
-                    beatgrid: f.analysis.beatgrid.as_ref(),
+                    cues: f.analysis.cues.clone(),
+                    beatgrid: f.analysis.beatgrid.clone(),
                 });
             }
         }
+        let entries: Vec<ExportEntry> = own
+            .iter()
+            .map(|f| ExportEntry {
+                path: &f.path,
+                title: &f.title,
+                artist: &f.artist,
+                album: &f.album,
+                genre: &f.genre,
+                bpm: f.bpm,
+                key_camelot: f.key_camelot.as_deref(),
+                key_name: f.key_name.as_deref(),
+                energy: f.energy,
+                duration_s: f.duration_s,
+                cues: &f.cues,
+                beatgrid: f.beatgrid.as_ref(),
+            })
+            .collect();
         if self.prefs.export_traktor {
             match sm_export::write_traktor_nml(&entries, &dir.join("smart-mix.nml")) {
                 Ok(_) => log.push_str("✓ Traktor NML\n"),
@@ -1326,23 +1342,27 @@ impl SmartMixApp {
             }
         }
         if self.prefs.export_serato {
-            let crate_list = vec![("Smart Mix".to_string(), {
-                let mut v = Vec::new();
-                for e in &entries {
-                    v.push(e.path.to_string());
-                }
-                v
-            })];
+            let crate_list = vec![(
+                "Smart Mix".to_string(),
+                entries.iter().map(|e| e.path.to_string()).collect::<Vec<_>>(),
+            )];
             match sm_export::write_serato_crates(&crate_list, dir) {
                 Ok(_) => log.push_str("✓ Serato crate\n"),
                 Err(e) => log.push_str(&format!("✗ Serato: {e}\n")),
             }
         }
+        match sm_export::write_m3u(
+            &entries.iter().map(|e| e.path.to_string()).collect::<Vec<_>>(),
+            &dir.join("smart-mix.m3u"),
+        ) {
+            Ok(_) => log.push_str("✓ M3U\n"),
+            Err(e) => log.push_str(&format!("✗ M3U: {e}\n")),
+        }
         match sm_export::write_csv(&entries, &dir.join("smart-mix.csv")) {
             Ok(_) => log.push_str("✓ CSV\n"),
             Err(e) => log.push_str(&format!("✗ CSV: {e}\n")),
         }
-        log.push_str(&format!("→ {} en {}", entries.len(), dir.display()));
+        log.push_str(&format!("→ {} pistas en {}", entries.len(), dir.display()));
         log
     }
 }

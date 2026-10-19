@@ -3,11 +3,10 @@
 //! sm-i18n con las claves compartidas del toolkit (USB/equipos).
 
 pub fn t(lang: &str, key: &str) -> String {
-    let es = es(key);
     if lang.starts_with("es") {
-        return es;
+        return es(key);
     }
-    en(key, &es)
+    en(key, es(key))
 }
 
 fn en(key: &str, fallback: String) -> String {

@@ -4,7 +4,7 @@
 //! un acento chartreuse eléctrico y tipografía serif para títulos.
 //! Sistema visual separado de la lógica: todos los colores viven aquí.
 
-use egui::{Color32, Rgba};
+use egui::Color32;
 
 #[derive(Debug, Clone)]
 pub struct Theme {
@@ -49,18 +49,33 @@ pub fn energy_color(level: f64) -> Color32 {
 }
 
 /// Color de la celda de clave Camelot (misma familia = matiz similar).
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
+    let i = (h * 6.0).floor();
+    let f = h * 6.0 - i;
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - f * s);
+    let t = v * (1.0 - (1.0 - f) * s);
+    match (i as i32) % 6 {
+        0 => (v, t, p),
+        1 => (q, v, p),
+        2 => (p, v, t),
+        3 => (p, q, v),
+        4 => (t, p, v),
+        _ => (v, p, q),
+    }
+}
+
 pub fn key_color(code: &str) -> Color32 {
     let k = sm_model::camelot::CamelotKey::parse(code);
     let hue = match k {
         Some(k) => (k.num as f32 - 1.0) / 12.0,
         None => 0.5,
     };
-    let c = Rgba::from_hsv(hue, 0.28, 0.95);
-    Color32::from_rgba_premultiplied(
-        (c.r() * 255.0) as u8,
-        (c.g() * 255.0) as u8,
-        (c.b() * 255.0) as u8,
-        255,
+    let (r, g, b) = hsv_to_rgb(hue, 0.28, 0.95);
+    Color32::from_rgb(
+        (r * 255.0) as u8,
+        (g * 255.0) as u8,
+        (b * 255.0) as u8,
     )
 }
 
@@ -84,7 +99,7 @@ pub fn install(ctx: &egui::Context) {
     v.selection.stroke = egui::Stroke::new(1.0, t.accent);
     v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, t.border);
     v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, t.border);
-    v hyperlink_color = t.accent;
+    v.hyperlink_color = t.accent;
     ctx.set_visuals(v);
 
     // Tipografía editorial: serif (Georgia) para Heading; resto por defecto.

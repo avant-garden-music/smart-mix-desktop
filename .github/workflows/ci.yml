@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Deps Linux (audio)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config
+      - name: Build
+        run: cargo build --workspace --verbose
+      - name: Tests (motor + db + export + i18n + audio)
+        run: cargo test --workspace
+      - name: Test release (DSP con señales largas)
+        run: cargo test --workspace --release
+      - name: Upload binario Windows
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart-mix-windows-${{ github.sha }}
+          path: target/release/smart-mix.exe
+          retention-days: 7
