@@ -338,6 +338,7 @@ impl SmartMixApp {
     }
 
     fn deck_play(&mut self, deck: usize) {
+        eprintln!("[play] deck={deck} sel={:?}", self.selected_id);
         let Some(id) = self.selected_id else { return };
         let Some(full) = &self.detail else { return };
         let Some(player) = &self.player else { return };
@@ -1159,7 +1160,7 @@ impl SmartMixApp {
                     .body(|mut body| {
                         body.rows(ROW_H, total, |mut row| {
                             let i = row.index();
-                            let tr = cache.borrow_mut().get(i);
+let tr = cache.borrow_mut().get(i);
                             let Some(tr) = tr else {
                                 for _ in 0..COLS.len() {
                                     row.col(|ui| {
@@ -1187,35 +1188,39 @@ impl SmartMixApp {
                             });
                             // título
                             row.col(|ui| {
-                                let resp = ui.add(
-                                    egui::Label::new({
-                                        let base = egui::RichText::new(tr.title.clone())
-                                            .color(if selected { t.accent } else { t.text });
-                                        if selected {
-                                            base.strong()
-                                        } else {
-                                            base
-                                        }
-                                    })
-                                    .selectable(false)
-                                    .truncate(true),
+                                let base = egui::RichText::new(tr.title.clone())
+                                    .color(if selected { t.accent } else { t.text });
+                                let base = if selected { base.strong() } else { base };
+                                let btn = egui::Button::new(base)
+                                    .fill(Color32::TRANSPARENT)
+                                    .small()
+                                    .wrap(false);
+                                let resp = ui.add_sized(
+                                    [ui.available_width(), ROW_H - 2.0],
+                                    btn,
                                 );
                                 any_click |= resp.clicked();
                                 dbl_click |= resp.double_clicked();
                             });
                             // artista / álbum
                             for txt in [&tr.artist, &tr.album] {
-                                let label = egui::Label::new(
-                                    egui::RichText::new(txt.clone()).color(t.text_dim),
-                                )
-                                .selectable(false)
-                                .truncate(true);
+                                let rt = egui::RichText::new(txt.clone()).color(t.text_dim);
                                 let mut hit = false;
+                                let mut dbl2 = false;
                                 row.col(|ui| {
-                                    let resp = ui.add(label).interact(egui::Sense::click());
+                                    let btn = egui::Button::new(rt.clone())
+                                        .fill(Color32::TRANSPARENT)
+                                        .small()
+                                        .wrap(false);
+                                    let resp = ui.add_sized(
+                                        [ui.available_width(), ROW_H - 2.0],
+                                        btn,
+                                    );
                                     hit = resp.clicked();
+                                    dbl2 |= resp.double_clicked();
                                 });
                                 any_click |= hit;
+                                dbl_click |= dbl2;
                             }
                             // tonalidad (chip)
                             let key_clicked = Rc::new(RefCell::new(false));
