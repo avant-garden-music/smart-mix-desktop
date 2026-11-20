@@ -34,7 +34,7 @@ jobs:
       - name: Higiene (sin menciones de vendors de referencia)
         run: |
           # cerrojo legal: falla si algo con estos patrones vuelve a entrar
-          ! git grep -ilE "mixed[ _]?in[ _]?key|mikstore|mik_cues|MikStyle" -- . ':!*.lock'
+          ! git grep -ilE "mixed[ _]?in[ _]?key|mikstore|mik_cues|MikStyle" -- . ':!*.lock' ':!.github/workflows/ci.yml'
       - name: Tests (motor + db + export + i18n + audio)
         run: cargo test --workspace
       - name: Test release (DSP con señales largas)
