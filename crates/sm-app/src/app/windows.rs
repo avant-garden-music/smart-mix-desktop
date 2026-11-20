@@ -997,6 +997,28 @@ impl SmartMixApp {
                         if ui.button("Recargar selección").clicked() {
                             self.tag_load_tracks();
                         }
+                        // Cierre: cancelar cierra el editor DESCARTANDO los
+                        // campos no aplicados (VOLVER los conserva).
+                        if ui
+                            .button(
+                                egui::RichText::new(crate::texts::t(
+                                    &self.prefs.language,
+                                    "studio.cancel",
+                                ))
+                                .strong()
+                                .color(t.cyan),
+                            )
+                            .on_hover_text(
+                                "Cierra el editor descartando los campos aún no aplicados",
+                            )
+                            .clicked()
+                        {
+                            self.tag_fields = crate::tag_editor::TagEditFields::default();
+                            self.tag_junk_scanned = false;
+                            self.tag_junk_preview.clear();
+                            self.tag_report.clear();
+                            self.tags_view = false;
+                        }
                     });
                         ui.label(
                             egui::RichText::new(format!(
@@ -1036,7 +1058,13 @@ impl SmartMixApp {
                                             .color(t.text_dim),
                                     );
                                 }
+                                // Cierre: aire inferior para que la última
+                                // fila del preview quede ENTERA al llegar al
+                                // final del scroll (antes quedaba recortada
+                                // contra el borde del área).
+                                ui.add_space(10.0);
                             });
+                        ui.add_space(6.0);
                     }
                     // -------------------------------------------------------
                     // F-31: limpieza de tags basura (preview antes de aplicar)
@@ -1134,6 +1162,8 @@ impl SmartMixApp {
                                             .color(t.text_dim),
                                     );
                                 }
+                                // Cierre: mismo aire inferior del preview principal
+                                ui.add_space(10.0);
                             });
                         }
                     }

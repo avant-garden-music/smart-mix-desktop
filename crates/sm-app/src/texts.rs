@@ -84,6 +84,7 @@ fn en(key: &str, fallback: String) -> String {
         "studio.analyzing" => "ANALYSIS".into(),
         "studio.analyzing_now" => "Analyzing: {track}".into(),
         "studio.cancel_analysis" => "CANCEL".into(),
+        "studio.cancel" => "Cancel".into(),
         "studio.import" => "Import".into(),
         "studio.analyze" => "Analyze".into(),
         "studio.tools" => "Library tools".into(),
@@ -252,6 +253,7 @@ fn es(key: &str) -> String {
         "studio.analyzing" => "ANÁLISIS".into(),
         "studio.analyzing_now" => "Analizando: {track}".into(),
         "studio.cancel_analysis" => "CANCELAR".into(),
+        "studio.cancel" => "Cancelar".into(),
         "studio.import" => "Importar".into(),
         "studio.analyze" => "Analizar".into(),
         "studio.tools" => "Herramientas de biblioteca".into(),
@@ -381,5 +383,15 @@ mod tests {
         assert_eq!(super::t("en", "studio.duration"), "Duration");
         // otros idiomas caen al bloque en
         assert_eq!(super::t("fr", "studio.duration"), "Duration");
+    }
+
+    /// Cierre (botón cancelar): la clave existía USADA en el drawer del
+    /// studio pero no definida — la cascada pintaba "studio.cancel" crudo.
+    /// Este test obliga a que exista en AMBOS idiomas antes de producción.
+    #[test]
+    fn studio_cancel_exists_in_both_languages() {
+        assert_eq!(super::t("es", "studio.cancel"), "Cancelar");
+        assert_eq!(super::t("en", "studio.cancel"), "Cancel");
+        assert_eq!(super::t("fr", "studio.cancel"), "Cancel");
     }
 }
