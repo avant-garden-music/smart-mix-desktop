@@ -1534,6 +1534,25 @@ impl eframe::App for SmartMixApp {
                 }
             }
         }
+        // hook de verificación (cierre ítem 10): SM_SELECT=<id> selecciona
+        // una pista concreta al arrancar — captura de la portada en la
+        // cabecera del player con una pista que SÍ tiene arte.
+        {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            static SELECT_HOOK: AtomicBool = AtomicBool::new(false);
+            // espera a que las filas estén cargadas antes de consumir el hook
+            if !SELECT_HOOK.load(Ordering::Relaxed) && !self.rows.is_empty() {
+                if let Ok(v) = std::env::var("SM_SELECT") {
+                    if let Ok(id) = v.trim().parse::<i64>() {
+                        if self.rows.values().any(|r| r.id == id) {
+                            self.select(id);
+                            SELECT_HOOK.store(true, Ordering::Relaxed);
+                            eprintln!("[qa] SM_SELECT: pista {id} seleccionada");
+                        }
+                    }
+                }
+            }
+        }
         // hook de verificación: SM_WHEEL=1 abre la rueda Camelot al arrancar
         {
             use std::sync::atomic::{AtomicBool, Ordering};
