@@ -31,6 +31,10 @@ jobs:
           sudo apt-get install -y libasound2-dev pkg-config libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev || sudo apt-get install -y libasound2-dev pkg-config libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.0-dev
       - name: Build
         run: cargo build --workspace --verbose
+      - name: Higiene (sin menciones de vendors de referencia)
+        run: |
+          # cerrojo legal: falla si algo con estos patrones vuelve a entrar
+          ! git grep -ilE "mixed[ _]?in[ _]?key|mikstore|mik_cues|MikStyle" -- . ':!*.lock'
       - name: Tests (motor + db + export + i18n + audio)
         run: cargo test --workspace
       - name: Test release (DSP con señales largas)
