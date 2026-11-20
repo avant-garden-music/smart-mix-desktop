@@ -743,6 +743,65 @@ fn rating_por_defecto_cero_y_roundtrip() {
     assert!(db.rating(999).is_err());
 }
 
+// ---------------------------------------------------------------------------
+// Cierre: energía editable (set_energy, mismo patrón que set_rating)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn energia_editable_set_energy_roundtrip() {
+    let db = db();
+    let id = db.upsert_track(&meta("C:/e1.mp3", "Ener", "X")).unwrap();
+    let q = LibraryQuery {
+        limit: 0,
+        ..Default::default()
+    };
+    // recién creada: sin energía en la fila de tabla y en track_full
+    assert_eq!(db.query(&q).unwrap()[0].energy, None);
+    assert_eq!(db.track_full(id).unwrap().unwrap().analysis.energy, None);
+
+    for e in 1..=10u8 {
+        db.set_energy(id, Some(e)).unwrap();
+        assert_eq!(
+            db.track_full(id).unwrap().unwrap().analysis.energy,
+            Some(e as f64),
+            "set {e}"
+        );
+        assert_eq!(db.query(&q).unwrap()[0].energy, Some(e as f64));
+    }
+    // None limpia el valor manual
+    db.set_energy(id, None).unwrap();
+    assert_eq!(db.track_full(id).unwrap().unwrap().analysis.energy, None);
+
+    // clamp defensivo (rango válido 1..=10, misma escala que la UI 1-10)
+    db.set_energy(id, Some(0)).unwrap();
+    assert_eq!(db.track_full(id).unwrap().unwrap().analysis.energy, Some(1.0));
+    db.set_energy(id, Some(255)).unwrap();
+    assert_eq!(
+        db.track_full(id).unwrap().unwrap().analysis.energy,
+        Some(10.0)
+    );
+
+    // pista inexistente → error claro (misma garantía que set_rating)
+    assert!(db.set_energy(999, Some(3)).is_err());
+    assert!(db.set_energy(999, None).is_err());
+}
+
+/// El UPDATE de energía NO toca el resto del análisis: key/bpm/cues deben
+/// conservarse tal cual (contrato del editor de tags).
+#[test]
+fn set_energy_conserva_el_resto_del_analisis() {
+    let db = db();
+    let id = db.upsert_track(&meta("C:/e2.mp3", "Keep", "X")).unwrap();
+    db.save_analysis(id, &an(Some("8A"), Some(128.0), Some(4.0)))
+        .unwrap();
+    db.set_energy(id, Some(9)).unwrap();
+    let full = db.track_full(id).unwrap().expect("track_full");
+    assert_eq!(full.analysis.key_camelot.as_deref(), Some("8A"));
+    assert_eq!(full.analysis.tempo, Some(128.0));
+    assert_eq!(full.analysis.energy, Some(9.0), "energía manual aplicada");
+    assert_eq!(full.status, AnalysisStatus::Done, "sigue done");
+}
+
 #[test]
 fn sort_por_rating_descendente() {
     let db = db();

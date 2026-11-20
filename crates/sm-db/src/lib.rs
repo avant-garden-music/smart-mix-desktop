@@ -390,6 +390,19 @@ impl LibraryDb {
         }
     }
 
+    /// Cierre: fija la energía de la pista (escala 1-10; valores fuera de
+    /// rango se recortan). `None` limpia el valor. Es un UPDATE de la
+    /// columna `energy` del análisis — el esquema NO cambia. Una
+    /// re-análisis posterior vuelve a escribir su propia energía.
+    pub fn set_energy(&self, track_id: i64, energy: Option<u8>) -> Result<()> {
+        let e = energy.map(|e| e.clamp(1, 10) as f64);
+        let n = self.conn.execute(
+            "UPDATE tracks SET energy=?1 WHERE id=?2",
+            params![e, track_id],
+        )?;
+        ensure_track(n, track_id, "set_energy")
+    }
+
     /// Persiste el análisis completo: columnas planas para key/bpm/energy/
     /// volumen, JSON para cues/segments/beatgrid, bincode BLOB para waveform.
     /// Marca `analysis_status = done` y `analyzed_at = now`.
