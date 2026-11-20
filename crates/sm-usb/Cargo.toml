@@ -1,0 +1,10 @@
+[package]
+name = "sm-usb"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+zip = { version = "9.2.2", default-features = false, features = ["deflate"] }

@@ -1,0 +1,182 @@
+<?xml version='1.0' encoding='windows-1252'?>
+<!--
+  Smart Mix installer: per-user MSI (WiX v3, built with cargo-wix).
+
+  Key properties of this file:
+    * Per-user WITHOUT admin: Package/@InstallScope='perUser' emits ALLUSERS=2
+      plus MSIINSTALLPERUSER=1 (Windows Installer >= 5.0, i.e. Win7+). With
+      MSIINSTALLPERUSER=1 the Windows Installer service REMAPS
+      ProgramFiles64Folder, ProgramMenuFolder and DesktopFolder to their
+      per-user equivalents (%LOCALAPPDATA%\Programs, user Start Menu, user
+      desktop). Result: no UAC prompt on install or uninstall.
+    * STABLE UpgradeCode (hand-pinned; the cargo wix template generates a
+      RANDOM one per invocation and must never be used):
+      E766609D-F00E-4F39-AE2F-87D474BAF0E4.
+      NEVER change this GUID: it is the identity used by MajorUpgrade across
+      versions.
+    * No EULA: the project is LicenseRef-Proprietary and the repo has no
+      LICENSE file (see docs/RELEASE.md). The license dialog is skipped.
+    * Icon: assets/brand/app-icons/smart-mix.ico (built from the brand PNGs)
+      is copied next to the exe before compiling (scripts/build-msi.sh).
+
+  Variables substituted by cargo wix (do not edit):
+    $(var.CargoTargetBinDir) = dir with the release exe (target\release)
+    $(var.Version)           = workspace version from Cargo.toml (0.1.0)
+
+  Build (from the workspace root; scripts/build-msi.sh wraps all steps):
+    1. cargo build [release profile] -p sm-app
+    2. stage models + icon into target\release (see scripts/build-msi.sh)
+    3. cargo wix -b <wix-bin-dir> [no-build flag] -p sm-app -n SmartMix
+       -o target/wix/SmartMix-<version>-win64.msi
+-->
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+
+    <Product
+        Id='*'
+        Name='Smart Mix'
+        UpgradeCode='E766609D-F00E-4F39-AE2F-87D474BAF0E4'
+        Manufacturer='Avant Garden Music'
+        Language='1033'
+        Codepage='1252'
+        Version='$(var.Version)'>
+
+        <!--
+          perUser means ALLUSERS=2 plus MSIINSTALLPERUSER=1 (no UAC on Win7+).
+          InstallerVersion 500 = MSI 5.0, required for MSIINSTALLPERUSER.
+        -->
+        <Package Id='*'
+            Keywords='Installer;DJ;Music;Smart Mix'
+            Manufacturer='Avant Garden Music'
+            Description='Smart Mix $(var.Version) installer'
+            InstallerVersion='500'
+            Languages='1033'
+            Compressed='yes'
+            InstallScope='perUser'
+            SummaryCodepage='1252'
+            />
+
+        <MajorUpgrade
+            Schedule='afterInstallInitialize'
+            AllowSameVersionUpgrades='yes'
+            DowngradeErrorMessage='A newer version of Smart Mix is already installed. Setup will now exit.'/>
+
+        <MediaTemplate EmbedCab='yes'/>
+
+        <!--
+          Explicit per-user properties (MSI 5.0 mechanism). WiX3's
+          InstallScope='perUser' alone does NOT author these into the
+          Property table; without them a default install is per-machine
+          and asks for UAC. ALLUSERS=2 + MSIINSTALLPERUSER=1 installs
+          per-user WITHOUT elevation (folder remapping happens then).
+        -->
+        <Property Id='ALLUSERS' Value='2' />
+        <Property Id='MSIINSTALLPERUSER' Value='1' />
+
+        <!-- Add/Remove Programs icon (embedded into the MSI) -->
+        <Icon Id='SmartMix.ico' SourceFile='$(var.CargoTargetBinDir)\smart-mix.ico'/>
+        <Property Id='ARPPRODUCTICON' Value='SmartMix.ico' />
+        <SetProperty Id='ARPINSTALLLOCATION' Value='[INSTALLDIR]' After='CostFinalize'/>
+
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <!--
+              x64: ProgramFiles64Folder. With MSIINSTALLPERUSER=1 the
+              installer remaps it to %LOCALAPPDATA%\Programs (done by the
+              MSI service at install time, not by this wxs).
+            -->
+            <Directory Id='ProgramFiles64Folder' Name='PFiles'>
+                <Directory Id='INSTALLDIR' Name='Smart Mix'>
+
+                    <!-- smart-mix.exe. KeyPath in HKCU: standard per-user
+                         pattern (an HKLM keypath would require admin). -->
+                    <Component Id='MainExecutable' Guid='C8CA4559-9CE1-4343-A83E-98D58EF1A16A' Win64='yes'>
+                        <RegistryValue Root='HKCU'
+                            Key='Software\Avant Garden Music\Smart Mix'
+                            Name='exe' Type='integer' Value='1' KeyPath='yes'/>
+                        <File Id='SmartMixExe' Name='smart-mix.exe' DiskId='1'
+                              Source='$(var.CargoTargetBinDir)\smart-mix.exe'/>
+                    </Component>
+
+                    <!-- models/: an installed build resolves exe_dir/models
+                         (default_models_dir in sm-core/pipeline.rs). Without
+                         these files key/energy detection degrades to fallback. -->
+                    <Directory Id='ModelsDir' Name='models'>
+                        <Component Id='Models' Guid='CD75ABC8-CC18-4200-96A2-F0BB259F9D41' Win64='yes'>
+                            <RegistryValue Root='HKCU'
+                                Key='Software\Avant Garden Music\Smart Mix'
+                                Name='models' Type='integer' Value='1' KeyPath='yes'/>
+                            <File Id='MdlEnergyGlobal' Name='energy_global.onnx' DiskId='1'
+                                  Source='$(var.CargoTargetBinDir)\models\energy_global.onnx'/>
+                            <File Id='MdlEnergySegment' Name='energy_segment.onnx' DiskId='1'
+                                  Source='$(var.CargoTargetBinDir)\models\energy_segment.onnx'/>
+                            <File Id='MdlKeyLinear' Name='key_linear.json' DiskId='1'
+                                  Source='$(var.CargoTargetBinDir)\models\key_linear.json'/>
+                            <File Id='MdlKeyV2' Name='key_model_v2.onnx' DiskId='1'
+                                  Source='$(var.CargoTargetBinDir)\models\key_model_v2.onnx'/>
+                            <File Id='MdlKeyV4' Name='key_model_v4.onnx' DiskId='1'
+                                  Source='$(var.CargoTargetBinDir)\models\key_model_v4.onnx'/>
+                            <File Id='MdlKeyV4Nomap' Name='key_model_v4_nomap.onnx' DiskId='1'
+                                  Source='$(var.CargoTargetBinDir)\models\key_model_v4_nomap.onnx'/>
+                            <File Id='MdlCueRanker' Name='cue_ranker.json' DiskId='1'
+                                  Source='$(var.CargoTargetBinDir)\models\cue_ranker.json'/>
+                        </Component>
+                    </Directory>
+
+                    <!-- Start Menu shortcut for the user
+                         (ProgramMenuFolder is remapped per-user). -->
+                    <Directory Id='ProgramMenuFolder' Name='ProgMenu'>
+                        <Directory Id='AppShortcuts' Name='Smart Mix'>
+                            <Component Id='StartMenuShortcut' Guid='4EF96C97-4A93-4206-9207-BC26801FB5A5' Win64='yes'>
+                                <RegistryValue Root='HKCU'
+                                    Key='Software\Avant Garden Music\Smart Mix'
+                                    Name='shortcut' Type='integer' Value='1' KeyPath='yes'/>
+                                <Shortcut Id='StartMenuSmartMix'
+                                    Name='Smart Mix'
+                                    Description='Smart Mix - DJ library intelligence'
+                                    Target='[INSTALLDIR]smart-mix.exe'
+                                    WorkingDirectory='INSTALLDIR'
+                                    Icon='SmartMix.ico'/>
+                                <RemoveFolder Id='RemoveAppShortcuts' On='uninstall'/>
+                            </Component>
+                        </Directory>
+                    </Directory>
+
+                    <!-- Desktop shortcut for the user
+                         (DesktopFolder is remapped per-user). -->
+                    <Directory Id='DesktopFolder' Name='Desktop'>
+                        <Component Id='DesktopShortcut' Guid='64BB6CF3-E6ED-405B-A195-FB1E3CE1640F' Win64='yes'>
+                            <RegistryValue Root='HKCU'
+                                Key='Software\Avant Garden Music\Smart Mix'
+                                Name='desktop' Type='integer' Value='1' KeyPath='yes'/>
+                            <Shortcut Id='DesktopSmartMix'
+                                Name='Smart Mix'
+                                Description='Smart Mix - DJ library intelligence'
+                                Target='[INSTALLDIR]smart-mix.exe'
+                                WorkingDirectory='INSTALLDIR'
+                                Icon='SmartMix.ico'/>
+                        </Component>
+                    </Directory>
+
+                </Directory>
+            </Directory>
+        </Directory>
+
+        <Feature Id='Main' Level='1' Absent='disallow'>
+            <ComponentRef Id='MainExecutable'/>
+            <ComponentRef Id='Models'/>
+            <ComponentRef Id='StartMenuShortcut'/>
+            <ComponentRef Id='DesktopShortcut'/>
+        </Feature>
+
+        <!-- Minimal UI without EULA: Welcome, then choose dir, then confirm.
+             The Order=2 Publish entries skip LicenseAgreementDlg
+             (documented WixUI_InstallDir pattern). -->
+        <Property Id='WIXUI_INSTALLDIR' Value='INSTALLDIR'/>
+        <UI>
+            <UIRef Id='WixUI_InstallDir'/>
+            <Publish Dialog='WelcomeDlg' Control='Next' Event='NewDialog' Value='InstallDirDlg' Order='2'>1</Publish>
+            <Publish Dialog='InstallDirDlg' Control='Back' Event='NewDialog' Value='WelcomeDlg' Order='2'>1</Publish>
+        </UI>
+
+    </Product>
+
+</Wix>

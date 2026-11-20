@@ -1,0 +1,13 @@
+[package]
+name = "sm-export"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sm-model = { workspace = true }
+anyhow = { workspace = true }
+lofty = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+rusqlite = { workspace = true }

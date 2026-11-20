@@ -1,0 +1,12 @@
+[package]
+name = "sm-library"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sm-model = { workspace = true }
+anyhow = { workspace = true }
+lofty = { workspace = true }
+rayon = { workspace = true }
+tracing = { workspace = true }
+walkdir = "2"

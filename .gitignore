@@ -1,0 +1,21 @@
+/target
+/target-*/
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+.env
+*.pem
+*.key
+# Audio protegido y datasets de terceros: NUNCA al repo
+*.mp3
+*.aiff
+*.aif
+*.flac
+*.m4a
+*.wav
+*.ogg
+!.gitkeep
+corpus/
+ground-truth-audio/
+dist/
