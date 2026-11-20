@@ -80,6 +80,47 @@ pub fn small(text: impl Into<String>, color: Color32) -> egui::RichText {
     egui::RichText::new(text).size(FONT_SMALL).color(color)
 }
 
+/// Cierre (elipsis): texto de UNA línea truncado con "…" para que quepa en
+/// `max_width` con la fuente dada. Las celdas de la tabla pintan su texto
+/// con `Button::wrap(false)` — ancho natural, corte en seco sin elipsis —
+/// así que el recorte con elipsis se calcula AQUÍ contra el ancho real de
+/// la celda. Medición con los glifos instalados (layout sin wrap).
+pub fn ellipsize(
+    fonts: &egui::text::Fonts,
+    text: &str,
+    font_id: egui::FontId,
+    max_width: f32,
+) -> String {
+    let width = |s: &str| {
+        fonts
+            .layout_delayed_color(s.to_owned(), font_id.clone(), f32::INFINITY)
+            .size()
+            .x
+    };
+    if text.is_empty() || width(text) <= max_width {
+        return text.to_owned();
+    }
+    const ELLIPSIS: &str = "…";
+    let limit = (max_width - width(ELLIPSIS)).max(0.0);
+    let chars: Vec<char> = text.chars().collect();
+    // búsqueda binaria del prefijo más largo que cabe en `limit`
+    let (mut lo, mut hi) = (0usize, chars.len()); // lo cabe, hi no
+    while lo < hi {
+        let mid = (lo + hi + 1) / 2;
+        if width(&chars[..mid].iter().collect::<String>()) <= limit {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let mut prefix: String = chars[..lo].iter().collect();
+    while prefix.ends_with(char::is_whitespace) {
+        prefix.pop();
+    }
+    prefix.push_str(ELLIPSIS);
+    prefix
+}
+
 /// Etiqueta de sección (SUBTLE).
 pub fn section_label(ui: &mut egui::Ui, label: &str) {
     ui.label(small(label, SUBTLE));

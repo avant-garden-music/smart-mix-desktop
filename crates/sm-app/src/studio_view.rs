@@ -2031,8 +2031,23 @@ impl StudioUi {
                                             // Un Button a ancho completo CENTRA su
                                             // texto y rompía la coaxialidad con el
                                             // header 'Título' (medido en captura).
+                                            // Cierre (elipsis): el texto se acota
+                                            // al ancho restante de la celda con
+                                            // "…" — antes el corte era en seco.
+                                            let avail =
+                                                (ui.available_width() - 26.0).max(20.0);
+                                            let shown = ui.fonts(|fonts| {
+                                                studio::ellipsize(
+                                                    fonts,
+                                                    &track.title,
+                                                    egui::FontId::proportional(
+                                                        TABLE_CELL_FONT,
+                                                    ),
+                                                    avail,
+                                                )
+                                            });
                                             let label = egui::Button::new(
-                                                RichText::new(&track.title)
+                                                RichText::new(shown)
                                                     .size(TABLE_CELL_FONT)
                                                     .color(studio::TEXT),
                                             )
@@ -2066,8 +2081,18 @@ impl StudioUi {
                                             &track.artist
                                         };
                                         // ancho NATURAL — a la izquierda, idem título
+                                        // (y con elipsis "…" al ancho de la celda)
+                                        let avail = (ui.available_width() - 26.0).max(20.0);
+                                        let shown = ui.fonts(|fonts| {
+                                            studio::ellipsize(
+                                                fonts,
+                                                artist,
+                                                egui::FontId::proportional(TABLE_CELL_FONT),
+                                                avail,
+                                            )
+                                        });
                                         let label = egui::Button::new(
-                                            RichText::new(artist)
+                                            RichText::new(shown)
                                                 .size(TABLE_CELL_FONT)
                                                 .color(studio::SECONDARY),
                                         )
@@ -3877,6 +3902,52 @@ mod tests {
         assert_eq!(TABLE_ROW_HEIGHT, 38.0);
         assert_eq!(TABLE_HEADER_HEIGHT, 34.0);
         assert_eq!(studio::STATUS_H, 30.0);
+    }
+
+    /// Cierre (elipsis): el título de fila que no cabe en su columna se
+    /// acorta con "…" medido con la MISMA fuente de la tabla — nunca excede
+    /// el ancho disponible y el texto corto pasa intacto.
+    #[test]
+    fn ellipsize_cuts_with_ellipsis_and_never_exceeds_the_width() {
+        let ctx = egui::Context::default();
+        // mismo TTF Barlow SC 500 de producción (idem test de mínimos)
+        let mut fonts = egui::FontDefinitions::default();
+        let ttf = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/fonts/barlow-semi-condensed/barlow-semi-condensed-v16-latin-500.ttf"
+        ))
+        .expect("ttf barlow del repo");
+        fonts
+            .font_data
+            .insert("barlow".into(), egui::FontData::from_owned(ttf).into());
+        fonts
+            .families
+            .get_mut(&egui::FontFamily::Proportional)
+            .unwrap()
+            .insert(0, "barlow".into());
+        ctx.set_fonts(fonts);
+        let font = egui::FontId::proportional(TABLE_CELL_FONT);
+        let raw = egui::RawInput::default();
+        let _ = ctx.run(raw, |ctx| {
+            ctx.fonts(|fonts| {
+                let long = "like we were the last two people on earth (extended mix)";
+                let full = fonts
+                    .layout_delayed_color(long.to_owned(), font.clone(), f32::INFINITY)
+                    .size()
+                    .x;
+                let max = full * 0.6;
+                let out = studio::ellipsize(fonts, long, font.clone(), max);
+                assert!(out.ends_with('…'), "debe terminar en elipsis: {out}");
+                assert!(out.chars().count() < long.chars().count());
+                let w = fonts
+                    .layout_delayed_color(out.clone(), font.clone(), f32::INFINITY)
+                    .size()
+                    .x;
+                assert!(w <= max + 0.5, "excede el ancho: {w} > {max}");
+                // texto que ya cabe → intacto
+                assert_eq!(studio::ellipsize(fonts, "Short", font.clone(), 500.0), "Short");
+            });
+        });
     }
 
     /// fix table-rb: los MÍNIMOS de las columnas de TEXTO alojan el header
