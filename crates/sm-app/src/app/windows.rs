@@ -1028,8 +1028,15 @@ impl SmartMixApp {
                             .small()
                             .color(t.text),
                         );
+                        // Cierre (preview sin recorte): filas de paso FIJO
+                        // (20px de fila + 6 de spacing) y viewport en filas
+                        // ENTERAS (7 filas = 182px) — nunca queda media fila
+                        // cortada dentro del área, y el aire inferior
+                        // garantiza que la última fila se vea completa al
+                        // llegar al final del scroll.
+                        let pitch = 26.0;
                         egui::ScrollArea::vertical()
-                            .max_height(200.0)
+                            .max_height(7.0 * pitch)
                             .show(ui, |ui| {
                                 for (_id, meta) in self.tag_tracks.iter().take(20) {
                                     let line =
@@ -1042,14 +1049,21 @@ impl SmartMixApp {
                                     } else {
                                         meta.title.clone()
                                     };
-                                    ui.monospace(format!(
+                                    let text = format!(
                                         "{name} · {}",
                                         if line.is_empty() {
                                             "sin cambios".into()
                                         } else {
                                             line
                                         }
-                                    ));
+                                    );
+                                    ui.add_sized(
+                                        [ui.available_width(), pitch - 6.0],
+                                        egui::Label::new(
+                                            egui::RichText::new(text).monospace(),
+                                        )
+                                        .wrap(false),
+                                    );
                                 }
                                 if n > 20 {
                                     ui.label(
@@ -1058,10 +1072,6 @@ impl SmartMixApp {
                                             .color(t.text_dim),
                                     );
                                 }
-                                // Cierre: aire inferior para que la última
-                                // fila del preview quede ENTERA al llegar al
-                                // final del scroll (antes quedaba recortada
-                                // contra el borde del área).
                                 ui.add_space(10.0);
                             });
                         ui.add_space(6.0);
