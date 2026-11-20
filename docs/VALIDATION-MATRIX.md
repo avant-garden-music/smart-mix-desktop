@@ -41,6 +41,25 @@ y capturada con CopyFromScreen; verificación por visión + sondas de píxel.
    `studio::ellipsize` con "…" en título/artista de la tabla (el deck ya
    usaba `Label::truncate` de egui, que elide)
 
+## Adiciones de cierre tras prueba del dueño (portadas)
+
+- **Portadas al analizar (pipeline)**: `sm_export::id3::embedded_cover`
+  (APIC/covr vía lofty, prefiere CoverFront) + backfill en el worker tras
+  `save_analysis` SOLO si la pista no tiene cover. Tests: con APIC queda
+  cover tras el análisis; sin APIC queda NULL; cover previo NO se pisa.
+- **Portada en la cabecera del player**: el rect 52×52 (radio 9) usa el
+  mismo CoverArt/LRU de la tabla; fallback vinilo si no hay arte.
+  Verificado en captura (`sm_shots/cierre_player_cover.png`).
+- **Centro de la rueda CONDICIONAL**: al filtrar por tonalidad muestra el
+  tono elegido en texto grande LILAC 27 (sin portada); en modo neutro con
+  pista cargada muestra la portada circular. `wheel_center()` pura con
+  tests. Verificado en capturas (`cierre_compat.png` centro "7B" con
+  filtro; `cierre_player_cover.png` centro portada en neutro).
+- **Investigación "clins"**: "3 clips" renderiza con 'p' clara a 4×
+  (`cierre_clips_zoom.png`); egui/epaint no aplica ligaduras — no
+  reproducible en esta máquina/DPI; se documenta y se deja el label tal
+  cual.
+
 ## Modal Safe Format
 Reformateado a listas numeradas/secciones (commit 9d3085c) — verificado por
 código y compilación; requiere USB real + interacción para validación visual
