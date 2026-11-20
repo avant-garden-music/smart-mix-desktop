@@ -2410,34 +2410,30 @@ impl StudioUi {
                                         texts::t(lang, "studio.energy_short"),
                                         studio::SECONDARY,
                                     ));
-                                    // La energía la fija el ANÁLISIS: no hay
-                                    // setter por pista en sm-db (regla del
-                                    // proyecto) → campo solo lectura.
-                                    columns[0].add_enabled_ui(false, |ui| {
-                                        let selected = draft
-                                            .energy
-                                            .map(|energy| format!("{energy} / 10"))
-                                            .unwrap_or_else(|| "—".into());
-                                        let mut value = draft.energy;
-                                        ComboBox::from_id_source("studio_tag_energy")
-                                            .width(ui.available_width())
-                                            .selected_text(selected)
-                                            .show_ui(ui, |ui| {
-                                                for energy in 1..=10u8 {
-                                                    ui.selectable_value(
-                                                        &mut value,
-                                                        Some(energy),
-                                                        format!("{energy} / 10"),
-                                                    );
-                                                }
-                                            });
-                                    });
-                                    columns[0]
-                                        .label(studio::small(
-                                            texts::t(lang, "studio.energy_ro"),
-                                            studio::SUBTLE,
-                                        ))
-                                        .on_hover_text(texts::t(lang, "studio.energy_ro"));
+                                    // Cierre: energía EDITABLE — combo activo sobre
+                                    // set_energy de sm-db. El valor entra al patch
+                                    // SOLO si el usuario lo cambió (None = no tocar).
+                                    let old = draft.energy;
+                                    ComboBox::from_id_source("studio_tag_energy")
+                                        .width(columns[0].available_width())
+                                        .selected_text(
+                                            draft
+                                                .energy
+                                                .map(|energy| format!("{energy} / 10"))
+                                                .unwrap_or_else(|| "—".into()),
+                                        )
+                                        .show_ui(&mut columns[0], |ui| {
+                                            for energy in 1..=10u8 {
+                                                ui.selectable_value(
+                                                    &mut draft.energy,
+                                                    Some(energy),
+                                                    format!("{energy} / 10"),
+                                                );
+                                            }
+                                        });
+                                    if draft.energy != old {
+                                        draft.changed.energy = true;
+                                    }
                                     columns[1].label(studio::small(
                                         texts::t(lang, "studio.rating"),
                                         studio::SECONDARY,
@@ -2947,7 +2943,7 @@ impl StudioUi {
         actions.push(Action::SetCollection(collection));
     }
 
-    fn open_editor(&mut self, model: &Model, ids: Vec<TrackId>, field: EditField) {
+    pub(crate) fn open_editor(&mut self, model: &Model, ids: Vec<TrackId>, field: EditField) {
         self.editor = TagDraft::from_model(model, &ids);
         if let Some(draft) = &mut self.editor {
             draft.focus = Some(field);
@@ -3443,8 +3439,9 @@ impl TagDraft {
             patch.bpm = Some(value);
         }
         if self.changed.energy {
-            // sin setter real: nunca se emite (campo read-only en el drawer)
-            return Err(texts::t(lang, "studio.energy_ro"));
+            // Cierre: energía editable — se emite SOLO el valor cambiado
+            // (None en el patch = la pista no se toca).
+            patch.energy = self.energy;
         }
         if self.changed.rating {
             patch.rating = self.rating;
@@ -3576,6 +3573,32 @@ mod tests {
         assert_eq!(track_ids, [1, 2]);
         assert!(patch.bpm.is_none());
         assert!(patch.title.is_none());
+    }
+
+    /// Cierre (energía editable): el combo emite el valor SOLO cuando el
+    /// usuario lo cambió; sin cambio, el patch viaja con energy=None (la
+    /// pista no se toca) — mismo contrato que key/bpm/rating.
+    #[test]
+    fn energy_is_emitted_only_when_changed() {
+        let model = Model {
+            tracks: vec![sample_track(1, "First", 120.0)],
+            ..Model::default()
+        };
+        // sin tocar el combo → None (no tocar la pista)
+        let draft = TagDraft::from_model(&model, &[1]).unwrap();
+        let Action::ApplyTags { patch, .. } = draft.action("es").unwrap() else {
+            panic!("wrong action");
+        };
+        assert_eq!(patch.energy, None);
+
+        // cambio manual → valor nuevo en el patch
+        let mut draft = TagDraft::from_model(&model, &[1]).unwrap();
+        draft.energy = Some(8);
+        draft.changed.energy = true;
+        let Action::ApplyTags { patch, .. } = draft.action("es").unwrap() else {
+            panic!("wrong action");
+        };
+        assert_eq!(patch.energy, Some(8));
     }
 
     #[test]

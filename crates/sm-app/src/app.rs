@@ -352,6 +352,8 @@ pub struct SmartMixApp {
     pub(crate) detail_view: Option<i64>,
     /// El hook SM_PLAY ya corrió (una sola vez).
     pub(crate) play_hook_done: bool,
+    /// QA (cierre): SM_TAG_DRAWER=1 ya abrió el drawer del studio.
+    pub(crate) tag_drawer_hook_done: bool,
     /// hook QA (fix usb-scan): SM_USB_SCAN=1 dispara el scan de unidades al
     /// arrancar (una sola vez) — evidencia [usb-scan] en el log sin input GUI.
     pub(crate) usb_scan_hook_done: bool,
@@ -592,6 +594,7 @@ impl SmartMixApp {
             sidebar_stats: None,
             detail_view: None,
             play_hook_done: false,
+            tag_drawer_hook_done: false,
             usb_scan_hook_done: false,
             show_wheel: true, // rueda del sidebar expandida por defecto
             settings_view: false,
@@ -1502,6 +1505,18 @@ impl eframe::App for SmartMixApp {
                 }
             }
         }
+        // hook de verificación (cierre): SM_TAG_DRAWER=1 abre el drawer del
+        // editor de tags del studio sobre la primera pista — captura del
+        // combo de energía editable sin input de usuario.
+        if std::env::var("SM_TAG_DRAWER").as_deref() == Ok("1") && !self.tag_drawer_hook_done {
+            if let Some(rid) = self.rows.values().next().map(|r| r.id) {
+                self.tag_drawer_hook_done = true;
+                self.select(rid);
+                let model = self.build_studio_model();
+                self.studio_ui.open_editor(&model, vec![rid], studio_model::EditField::Energy);
+                eprintln!("[qa] SM_TAG_DRAWER: drawer de tags abierto (id={rid})");
+            }
+        }
         // hook de verificación: SM_WHEEL=1 abre la rueda Camelot al arrancar
         {
             use std::sync::atomic::{AtomicBool, Ordering};
@@ -2211,7 +2226,8 @@ impl SmartMixApp {
 
     /// Aplica un TagPatch del drawer con los setters REALES: título/artista
     /// vía track_full+upsert (conserva el análisis, F-11), key/bpm vía
-    /// override_key_bpm, rating vía set_rating. Solo campos modificados.
+    /// override_key_bpm, rating vía set_rating, energía vía set_energy
+    /// (cierre). Solo campos modificados.
     fn apply_tag_patch(&mut self, ids: Vec<i64>, patch: studio_model::TagPatch) {
         use studio_model::TagPatch;
         let TagPatch {
@@ -2219,12 +2235,9 @@ impl SmartMixApp {
             artist,
             key,
             bpm,
-            energy, // sin setter por pista: el drawer lo mantiene read-only
+            energy,
             rating,
         } = patch;
-        if energy.is_some() {
-            eprintln!("[studio] patch de energía ignorado (sin setter por pista)");
-        }
         let mut changes = 0usize;
         if let Ok(mut db) = self.db.lock() {
             for id in &ids {
@@ -2232,6 +2245,11 @@ impl SmartMixApp {
                     let k = key.map(|k| k.to_string());
                     let b = bpm.map(|b| b as f64);
                     if db.override_key_bpm(*id, k.as_deref(), b).is_ok() {
+                        changes += 1;
+                    }
+                }
+                if let Some(energy) = energy {
+                    if db.set_energy(*id, Some(energy)).is_ok() {
                         changes += 1;
                     }
                 }
