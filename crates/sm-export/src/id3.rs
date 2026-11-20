@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use lofty::{Accessor, AudioFile, ItemKey, Probe, Tag, TagType, TaggedFileExt};
+use lofty::{Accessor, AudioFile, ItemKey, PictureType, Probe, Tag, TagType, TaggedFileExt};
 
 /// Expande los placeholders `{key}` `{bpm}` `{energy}` de
 /// `comment_format`.
@@ -25,7 +25,9 @@ pub fn build_comment(comment_format: &str, key: &str, bpm: f64, energy: Option<f
         .replace("{bpm}", &format!("{}", bpm.round() as i64))
         .replace(
             "{energy}",
-            &energy.map(|e| format!("{}", e.round() as i64)).unwrap_or_default(),
+            &energy
+                .map(|e| format!("{}", e.round() as i64))
+                .unwrap_or_default(),
         )
 }
 
@@ -44,10 +46,30 @@ fn read_current(path: &Path) -> Result<(Option<String>, Option<String>, Option<S
     let tf = Probe::open(path)?.read()?;
     let tag = tf.primary_tag();
     Ok((
-        tag.and_then(|t| t.get_string(&ItemKey::InitialKey)).map(String::from),
-        tag.and_then(|t| t.get_string(&ItemKey::IntegerBpm)).map(String::from),
+        tag.and_then(|t| t.get_string(&ItemKey::InitialKey))
+            .map(String::from),
+        tag.and_then(|t| t.get_string(&ItemKey::IntegerBpm))
+            .map(String::from),
         tag.and_then(|t| t.comment().map(|c| c.into_owned())),
     ))
+}
+
+/// Cierre (portadas): lee el arte EMBEBIDO del tag primario del archivo
+/// (APIC en ID3v2 — mp3/aiff/wav — y equivalente en FLAC/MP4 vía lofty) y
+/// devuelve sus bytes. Prefiere la portada frontal (`CoverFront`); si no,
+/// el primer cuadro con datos. `None` si el archivo no se puede leer, no
+/// tiene tag o no tiene arte. Solo lectura: jamás escribe en el archivo.
+pub fn embedded_cover(path: impl AsRef<Path>) -> Option<Vec<u8>> {
+    let tf = Probe::open(path.as_ref()).ok()?.read().ok()?;
+    let tag = tf.primary_tag().or_else(|| tf.first_tag())?;
+    let pics = tag.pictures();
+    if pics.is_empty() {
+        return None;
+    }
+    pics.iter()
+        .find(|p| p.pic_type() == PictureType::CoverFront && !p.data().is_empty())
+        .or_else(|| pics.iter().find(|p| !p.data().is_empty()))
+        .map(|p| p.data().to_vec())
 }
 
 /// Escribe en `path`: comment según `comment_format`, initial key (TKEY) y
@@ -145,15 +167,34 @@ pub fn preview_id3(
 /// Fuente única de la detección: sm-app (tag_editor) la re-exporta.
 const JUNK_SUBSTRINGS: &[&str] = &[
     // tiendas / urls
-    "http://", "https://", "www.",
-    "beatport", "junodownload", "juno download", "traxsource", "bandcamp",
-    "audiojelly", "whatpeopleplay", "djdownload", "dj download",
-    "itunes", "apple music", "amazon", "google play",
+    "http://",
+    "https://",
+    "www.",
+    "beatport",
+    "junodownload",
+    "juno download",
+    "traxsource",
+    "bandcamp",
+    "audiojelly",
+    "whatpeopleplay",
+    "djdownload",
+    "dj download",
+    "itunes",
+    "apple music",
+    "amazon",
+    "google play",
     // procedencia
-    "purchased", "comprado en",
+    "purchased",
+    "comprado en",
     // herramientas de análisis / DJ
-    "traktor", "serato", "rekordbox", "keyfinder",
-    "rapid evolution", "platinum notes", "beatunes", "bpm analyzer",
+    "traktor",
+    "serato",
+    "rekordbox",
+    "keyfinder",
+    "rapid evolution",
+    "platinum notes",
+    "beatunes",
+    "bpm analyzer",
     "initial key",
     // codificador
     "lame3",
@@ -182,7 +223,8 @@ pub fn is_junk_comment(c: &str) -> bool {
         && digits
             .iter()
             .fold(0u32, |acc, b| acc * 10 + (b - b'0') as u32)
-            .wrapping_sub(1) < 12; // 1..=12
+            .wrapping_sub(1)
+            < 12; // 1..=12
     letter_ok && num_ok
 }
 
@@ -208,10 +250,8 @@ pub fn read_junk_state(path: impl AsRef<Path>) -> Result<JunkTagState> {
     let tag = tf.primary_tag();
     Ok(JunkTagState {
         comment: tag.and_then(|t| t.comment().map(|c| c.into_owned())),
-        itun_smpb: tag
-            .is_some_and(|t| t.get_string(&itun_smpb_key()).is_some()),
-        tcmp: tag
-            .is_some_and(|t| t.get_string(&ItemKey::FlagCompilation).is_some()),
+        itun_smpb: tag.is_some_and(|t| t.get_string(&itun_smpb_key()).is_some()),
+        tcmp: tag.is_some_and(|t| t.get_string(&ItemKey::FlagCompilation).is_some()),
     })
 }
 
@@ -248,7 +288,9 @@ pub fn remove_junk(
     if !(do_comment || do_smpb || do_tcmp) {
         return Ok(false);
     }
-    let tag = tf.primary_tag_mut().expect("tag presente si hay algo que borrar");
+    let tag = tf
+        .primary_tag_mut()
+        .expect("tag presente si hay algo que borrar");
     if do_comment {
         tag.remove_key(&ItemKey::Comment);
     }
@@ -272,6 +314,9 @@ mod tests {
         assert_eq!(c, "7A | 128 | Energy 6");
         assert_eq!(build_comment("{key}-{bpm}", "1A", 100.2, None), "1A-100");
         // placeholder desconocido se conserva; energy ausente → vacío
-        assert_eq!(build_comment("{key} {lufs} {energy}", "8B", 90.0, None), "8B {lufs} ");
+        assert_eq!(
+            build_comment("{key} {lufs} {energy}", "8B", 90.0, None),
+            "8B {lufs} "
+        );
     }
 }

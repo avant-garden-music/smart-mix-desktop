@@ -105,11 +105,23 @@ impl AnalysisPool {
                                 // mostraba "analizada" sin datos en BD. Ahora:
                                 // log + status Failed + evento Failed.
                                 let persist: Result<(), String> = match db.lock() {
-                                    Ok(db) => db.save_analysis(id, &analysis).map_err(|e| {
-                                        eprintln!("[worker] save_analysis fallo id={id}: {e}");
-                                        db.set_analysis_status(id, AnalysisStatus::Failed).ok();
-                                        e.to_string()
-                                    }),
+                                    Ok(db) => db
+                                        .save_analysis(id, &analysis)
+                                        .map_err(|e| {
+                                            eprintln!("[worker] save_analysis fallo id={id}: {e}");
+                                            db.set_analysis_status(id, AnalysisStatus::Failed).ok();
+                                            e.to_string()
+                                        })
+                                        .map(|_| {
+                                            // Cierre (portadas): tras persistir el
+                                            // análisis, arrastrar el arte embebido
+                                            // del archivo SOLO si la pista aún no
+                                            // tiene portada. Best-effort: un fallo
+                                            // aquí NO invalida el análisis.
+                                            if let Err(e) = backfill_cover(&db, id, &path) {
+                                                eprintln!("[worker] cover id={id} ignorada: {e}");
+                                            }
+                                        }),
                                     Err(e) => {
                                         eprintln!("[worker] db lock fallo id={id}: {e}");
                                         Err(format!("db lock: {e}"))
@@ -191,24 +203,36 @@ impl Drop for AnalysisPool {
     }
 }
 
+/// Cierre (portadas): arrastra el arte EMBEBIDO del archivo (APIC/covr,
+/// leído con lofty vía sm-export) a la BD tras el análisis. Reglas:
+///
+/// * SOLO si la pista aún NO tiene portada — nunca sobrescribe (respeta
+///   backfills manuales y decisiones previas).
+/// * SOLO si el archivo trae arte; sin arte la pista queda NULL.
+///
+/// El fallo se reporta al llamador (que lo loguea sin invalidar el
+/// análisis): mejor pista sin portada que re-análisis.
+fn backfill_cover(db: &LibraryDb, id: i64, path: &str) -> Result<(), String> {
+    let has_cover = matches!(db.cover(id), Ok(Some(bytes)) if !bytes.is_empty());
+    if has_cover {
+        return Ok(());
+    }
+    match sm_export::id3::embedded_cover(path) {
+        Some(bytes) if !bytes.is_empty() => db
+            .set_cover(id, Some(bytes))
+            .map_err(|e| format!("set_cover: {e}")),
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Audit B3: `save_analysis` fallido ⇒ el worker debe emitir `Failed`
-    /// (antes emitía `Finished` y la pista quedaba "analizada" sin datos en
-    /// BD). Se fuerza el fallo analizando un WAV PCM16 real de 1 s con un id
-    /// que NO existe en la BD en memoria: `analyze_track` da Ok y
-    /// `save_analysis` hace `bail!` en `ensure_track`.
-    #[test]
-    fn save_analysis_fallo_emite_failed_y_sube_contador() {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("sm-worker-b3-{}-{nanos}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let wav = dir.join("probe.wav");
+    /// WAV PCM16 mono de 1 s @ 8 kHz (señal 440 Hz) — el mismo probe real
+    /// del audit B3. Devuelve la ruta del archivo escrito.
+    fn write_probe_wav(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        let wav = dir.join(name);
         {
             use std::io::Write;
             const SR: u32 = 8_000;
@@ -236,6 +260,168 @@ mod tests {
             f.write_all(&data_len.to_le_bytes()).unwrap();
             f.write_all(&pcm).unwrap();
         }
+        wav
+    }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("sm-worker-{tag}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Cierre (portadas): el pipeline persiste el análisis Y arrastra el
+    /// arte embebido — pista con APIC queda con cover tras el análisis,
+    /// pista sin APIC queda NULL, y una pista que YA tiene cover no se
+    /// sobrescribe. WAV real de 1 s analizado con Models::none() por el
+    /// worker REAL (el mismo camino del audit B3).
+    #[test]
+    fn analisis_arrastro_arte_embebido_y_sin_arte_queda_null() {
+        let dir = temp_dir("cover");
+        let wav_with_art = write_probe_wav(&dir, "con_arte.wav");
+        let wav_no_art = write_probe_wav(&dir, "sin_arte.wav");
+        // arte sintético de 8+ bytes con firma PNG (lofty valida la firma)
+        let png: Vec<u8> = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, b'I', b'D', b'A', b'T', 1,
+            2, 3, 4,
+        ];
+        {
+            use lofty::{
+                AudioFile, MimeType, Picture, PictureType, Probe, Tag, TagType, TaggedFileExt,
+            };
+            let mut tf = Probe::open(&wav_with_art).unwrap().read().unwrap();
+            // mismo patrón que sm_export::id3 (tag_or_create)
+            if tf.primary_tag().is_none() {
+                tf.insert_tag(Tag::new(TagType::Id3v2));
+            }
+            let tag = tf.primary_tag_mut().expect("tag primario presente");
+            tag.push_picture(Picture::new_unchecked(
+                PictureType::CoverFront,
+                Some(MimeType::Png),
+                None,
+                png.clone(),
+            ));
+            tf.save_to_path(&wav_with_art).unwrap();
+        }
+
+        let db = Arc::new(Mutex::new(LibraryDb::open_in_memory().unwrap()));
+        let id_art = {
+            let mut g = db.lock().unwrap();
+            let id = g
+                .upsert_track(&sm_model::TrackMeta {
+                    path: wav_with_art.to_string_lossy().into_owned(),
+                    title: "Con arte".into(),
+                    artist: "X".into(),
+                    format: "wav".into(),
+                    duration_s: 1.0,
+                    ..Default::default()
+                })
+                .unwrap();
+            g.save_analysis(
+                id,
+                &sm_model::TrackAnalysis {
+                    duration_s: 1.0,
+                    ..Default::default()
+                },
+            )
+            .ok();
+            id
+        };
+        let id_plain = {
+            let mut g = db.lock().unwrap();
+            let id = g
+                .upsert_track(&sm_model::TrackMeta {
+                    path: wav_no_art.to_string_lossy().into_owned(),
+                    title: "Sin arte".into(),
+                    artist: "X".into(),
+                    format: "wav".into(),
+                    duration_s: 1.0,
+                    ..Default::default()
+                })
+                .unwrap();
+            g.save_analysis(
+                id,
+                &sm_model::TrackAnalysis {
+                    duration_s: 1.0,
+                    ..Default::default()
+                },
+            )
+            .ok();
+            id
+        };
+        // una tercera pista que YA tiene cover: el backfill NO lo pisa
+        // (copia del mismo WAV con APIC en OTRA ruta — path único en BD)
+        let wav_previo = dir.join("previo.wav");
+        std::fs::copy(&wav_with_art, &wav_previo).unwrap();
+        let id_existing = {
+            let mut g = db.lock().unwrap();
+            let id = g
+                .upsert_track(&sm_model::TrackMeta {
+                    path: wav_previo.to_string_lossy().into_owned(),
+                    title: "Cover previo".into(),
+                    artist: "X".into(),
+                    format: "wav".into(),
+                    duration_s: 1.0,
+                    ..Default::default()
+                })
+                .unwrap();
+            g.set_cover(id, Some(vec![0xAB, 0xCD])).unwrap();
+            id
+        };
+
+        {
+            let db = db.clone();
+            let pool = AnalysisPool::new(db.clone(), Arc::new(Models::none()), 1, Arc::new(|| {}));
+            pool.enqueue(vec![
+                (id_art, wav_with_art.to_string_lossy().into_owned()),
+                (id_plain, wav_no_art.to_string_lossy().into_owned()),
+                (id_existing, wav_previo.to_string_lossy().into_owned()),
+            ]);
+            // esperar los 3 eventos Finished
+            let mut finished = 0usize;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            while finished < 3 {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "timeout esperando {finished}/3 análisis"
+                );
+                match pool
+                    .events
+                    .recv_timeout(std::time::Duration::from_millis(1_000))
+                {
+                    Ok(AnalysisEvent::Finished(_, _)) => finished += 1,
+                    Ok(AnalysisEvent::Failed(id, e)) => {
+                        panic!("análisis id={id} falló inesperadamente: {e}")
+                    }
+                    _ => continue,
+                }
+            }
+        }
+
+        let g = db.lock().unwrap();
+        // con APIC → cover guardado, byte a byte el del archivo
+        assert_eq!(g.cover(id_art).unwrap(), Some(png.clone()));
+        // sin APIC → NULL
+        assert_eq!(g.cover(id_plain).unwrap(), None);
+        // cover previo → NO sobrescrito
+        assert_eq!(g.cover(id_existing).unwrap(), Some(vec![0xAB, 0xCD]));
+        drop(g);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Audit B3: `save_analysis` fallido ⇒ el worker debe emitir `Failed`
+    /// (antes emitía `Finished` y la pista quedaba "analizada" sin datos en
+    /// BD). Se fuerza el fallo analizando un WAV PCM16 real de 1 s con un id
+    /// que NO existe en la BD en memoria: `analyze_track` da Ok y
+    /// `save_analysis` hace `bail!` en `ensure_track`.
+    #[test]
+    fn save_analysis_fallo_emite_failed_y_sube_contador() {
+        let dir = temp_dir("b3");
+        let wav = write_probe_wav(&dir, "probe.wav");
 
         let db = Arc::new(Mutex::new(LibraryDb::open_in_memory().unwrap()));
         let pool = AnalysisPool::new(db.clone(), Arc::new(Models::none()), 1, Arc::new(|| {}));
