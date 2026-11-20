@@ -774,7 +774,10 @@ fn energia_editable_set_energy_roundtrip() {
 
     // clamp defensivo (rango válido 1..=10, misma escala que la UI 1-10)
     db.set_energy(id, Some(0)).unwrap();
-    assert_eq!(db.track_full(id).unwrap().unwrap().analysis.energy, Some(1.0));
+    assert_eq!(
+        db.track_full(id).unwrap().unwrap().analysis.energy,
+        Some(1.0)
+    );
     db.set_energy(id, Some(255)).unwrap();
     assert_eq!(
         db.track_full(id).unwrap().unwrap().analysis.energy,

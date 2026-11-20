@@ -17,16 +17,29 @@ y capturada con CopyFromScreen; verificación por visión + sondas de píxel.
 - Panel completo: Title/Artist/Album/Year/Genre, preview por pista,
   "APLICAR A N pista(s)" y "Recargar selección" visibles ✓
 - Layout limpio, campos alineados, sin texto amontonado ✓
+- Cierre: botón CANCELAR (descarta campos no aplicados) y aire inferior en
+  el preview ✓
 
-## Hallazgos pendientes (documentados, código CONGELADO por el dueño)
-1. Preview del editor se corta en el borde inferior (hay scroll — navegable)
-2. "Track cargado" de la rueda roza los números interiores del anillo
-3. Contador de "Todas las pistas (691)" pegado al texto del ítem
-4. Sin botón "cancelar" en el editor (se sale con "VOLVER")
-5. Accesos de BPM/tonalidad/energía no viven DENTRO del editor
-   (la energía editable sigue requiriendo el setter de BD — decisión pendiente)
-6. Nits previos: "3 clips" a veces se rasteriza como "3 clins" (glifo fi);
-   título de pista sin elipsis al truncar
+## Hallazgos pendientes — CIERRE (2026-11-20)
+1. ~~Preview del editor se corta en el borde inferior~~ → resuelto: aire
+   inferior (10px) dentro del scroll del preview (y del preview de basura)
+2. "Track cargado" de la rueda roza los números interiores del anillo —
+   sigue pendiente (cosmético, rueda)
+3. ~~Contador de "Todas las pistas" pegado al texto~~ → resuelto: el
+   contador del encabezado de colección vive en un chip separado (píldora
+   RAISED, mismo lenguaje que los contadores del sidebar)
+4. ~~Sin botón "cancelar" en el editor~~ → resuelto: CANCELAR en el Tag
+   Editor F-24 (i18n es/en, clave `studio.cancel` — que además estaba usada
+   sin definir en el drawer del studio)
+5. ~~La energía editable requiere el setter de BD~~ → resuelto:
+   `sm-db::set_energy` (UPDATE, sin cambio de esquema) + combo ACTIVO en el
+   drawer del studio (1-10, solo entra al patch si el usuario lo cambia)
+6. "3 clips" a veces se rasteriza como "3 clins" — investigado en el cierre:
+   egui/epaint NO aplica ligaduras (fi/fl); el label usa Barlow Semi
+   Condensed 14px. No reproducible en captura de esta máquina (ver
+   `docs/ROADMAP.md` / notas de cierre). Elipsis de truncado → resuelto:
+   `studio::ellipsize` con "…" en título/artista de la tabla (el deck ya
+   usaba `Label::truncate` de egui, que elide)
 
 ## Modal Safe Format
 Reformateado a listas numeradas/secciones (commit 9d3085c) — verificado por
