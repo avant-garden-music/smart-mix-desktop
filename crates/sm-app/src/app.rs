@@ -1518,6 +1518,22 @@ impl eframe::App for SmartMixApp {
                 eprintln!("[qa] SM_TAG_DRAWER: drawer de tags abierto (id={rid})");
             }
         }
+        // hook de verificación (cierre ítem 11): SM_COMPAT=<k> (p. ej. 7B)
+        // activa el filtro de tonalidad al arrancar — captura del centro de
+        // la rueda en modo tono elegido sin input GUI.
+        {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            static COMPAT_HOOK: AtomicBool = AtomicBool::new(false);
+            if !COMPAT_HOOK.swap(true, Ordering::Relaxed) {
+                if let Ok(v) = std::env::var("SM_COMPAT") {
+                    if let Ok(key) = v.trim().parse::<studio_model::Key>() {
+                        self.compat_key = Some(key.to_string());
+                        self.refresh();
+                        eprintln!("[qa] SM_COMPAT: filtro de tonalidad {key} activo");
+                    }
+                }
+            }
+        }
         // hook de verificación: SM_WHEEL=1 abre la rueda Camelot al arrancar
         {
             use std::sync::atomic::{AtomicBool, Ordering};
