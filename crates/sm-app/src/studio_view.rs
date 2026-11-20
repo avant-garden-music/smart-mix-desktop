@@ -411,7 +411,7 @@ impl StudioUi {
                     .inner_margin(Margin::symmetric(20.0, 0.0)),
             )
             .show(ctx, |ui| {
-                self.player(ui, &lang, model, waveform, &mut actions)
+                self.player(ui, &lang, model, waveform, covers, &mut actions)
             });
 
         TopBottomPanel::bottom("smart_mix_studio_status")
@@ -660,6 +660,7 @@ impl StudioUi {
         lang: &str,
         model: &Model,
         waveform: &mut dyn WaveformView,
+        covers: &mut dyn crate::studio_model::CoverArt,
         actions: &mut Vec<Action>,
     ) {
         ui.spacing_mut().item_spacing.y = 0.0;
@@ -671,14 +672,38 @@ impl StudioUi {
         let action_width = if compact_actions { 44.0 } else { 48.0 };
         let metric_width = 354.0;
         let art = Rect::from_min_size(head.min + vec2(0.0, 15.0), vec2(52.0, 52.0));
-        ui.painter().rect_filled(art, 9.0, studio::RAISED);
-        studio::draw_icon(
-            ui.painter(),
-            art.center(),
-            26.0,
-            studio::Icon::Disc,
-            studio::LILAC,
-        );
+        // Cierre (portada en cabecera): el rect de la cabecera muestra la
+        // portada de la pista CARGADA con el mismo pipeline de la tabla
+        // (CoverArt + LRU + worker; request_cover idempotente). Fallback
+        // vinilo cuando no hay pista o aún no llegó el arte.
+        let loaded_id = model.player.track.as_ref().map(|track| track.id);
+        let texture = loaded_id.and_then(|id| covers.cover_texture(id));
+        if let (Some(id), None) = (loaded_id, &texture) {
+            covers.request_cover(id);
+        }
+        match &texture {
+            Some(texture) => {
+                let uv = cover_uv(texture.size_vec2());
+                ui.painter().add(Shape::Rect(egui::epaint::RectShape {
+                    rect: art,
+                    rounding: Rounding::same(9.0),
+                    fill: Color32::WHITE,
+                    stroke: Stroke::NONE,
+                    fill_texture_id: texture.id(),
+                    uv,
+                }));
+            }
+            None => {
+                ui.painter().rect_filled(art, 9.0, studio::RAISED);
+                studio::draw_icon(
+                    ui.painter(),
+                    art.center(),
+                    26.0,
+                    studio::Icon::Disc,
+                    studio::LILAC,
+                );
+            }
+        }
 
         // La banda de identidad llega hasta top+86 (TRACKBAR_H=104): el
         // artista en caja de 24px — las descendentes ('p' de "upper
@@ -1420,53 +1445,68 @@ impl StudioUi {
                 );
             }
         }
-        // CENTRO DE LA RUEDA = PORTADA CIRCULAR (fix ui-rb2): reemplaza el
-        // texto grande de la tonalidad + el caption 'Track cargado' por la
-        // portada de la pista SONANDO, recortada en círculo más pequeño que
-        // el hueco central y con el borde LEVEMENTE DIFUMINADO (anillo de
-        // fundido radial hacia el fondo del sidebar, mesh con alpha por
-        // vértice). Usa el pipeline de portadas EXISTENTE (CoverArt +
+        // CENTRO DE LA RUEDA CONDICIONAL (cierre ítem 11): al FILTRAR por
+        // tonalidad (clic en un gajo) el centro muestra la tonalidad
+        // ELEGIDA en texto grande — estilo previo al fix ui-rb2 — y SIN
+        // portada. En modo neutro con pista cargada mantiene la portada
+        // circular (fix ui-rb2): portada SOLO al cargar pista, tono SOLO
+        // al filtrar. Usa el pipeline de portadas EXISTENTE (CoverArt +
         // CoverCache LRU + worker; request_cover es idempotente) con el
-        // MISMO fallback vinilo de la tabla para pistas sin arte. La
-        // tonalidad de la pista sigue viéndose en los gajos (sector
-        // resaltado) y el comportamiento NO cambia: hover de gajos igual,
-        // compatibles resaltadas igual, clic al centro = estado neutral.
+        // MISMO fallback vinilo de la tabla. El comportamiento del resto
+        // NO cambia: hover de gajos igual, compatibles resaltadas igual,
+        // clic al centro = estado neutral.
         let loaded_id = model.player.track.as_ref().map(|track| track.id);
-        let texture = loaded_id.and_then(|id| covers.cover_texture(id));
-        if let (Some(id), None) = (loaded_id, &texture) {
-            covers.request_cover(id);
-        }
-        // Ø 0.82·radius < hueco central (0.52·radius de radio interior)
-        let cover_r = radius * 0.41;
-        match &texture {
-            Some(texture) => {
-                let uv = cover_uv(texture.size_vec2());
-                ui.painter().add(Shape::Rect(egui::epaint::RectShape {
-                    rect: Rect::from_center_size(center, vec2(cover_r * 2.0, cover_r * 2.0)),
-                    rounding: Rounding::same(cover_r), // círculo
-                    fill: Color32::WHITE,
-                    stroke: Stroke::NONE,
-                    fill_texture_id: texture.id(),
-                    uv,
-                }));
-            }
-            None => {
-                // fallback vinilo (idem celda de portada de la tabla sin
-                // arte): disco RAISED + icono Disc + centro del fondo
-                ui.painter().circle_filled(center, cover_r, studio::RAISED);
-                studio::draw_icon(
-                    ui.painter(),
+        match wheel_center(self.compatibility, loaded_id) {
+            WheelCenter::Key(key) => {
+                ui.painter().text(
                     center,
-                    cover_r * 0.92,
-                    studio::Icon::Disc,
-                    studio::SUBTLE,
+                    Align2::CENTER_CENTER,
+                    key.to_string(),
+                    egui::FontId::proportional(WHEEL_CENTER_FONT),
+                    studio::LILAC,
                 );
-                ui.painter()
-                    .circle_filled(center, cover_r * 0.10, studio::SIDE);
+            }
+            WheelCenter::Cover(id) => {
+                let texture = id.and_then(|id| covers.cover_texture(id));
+                if let (Some(id), None) = (id, &texture) {
+                    covers.request_cover(id);
+                }
+                // Ø 0.82·radius < hueco central (0.52·radius de radio interior)
+                let cover_r = radius * 0.41;
+                match &texture {
+                    Some(texture) => {
+                        let uv = cover_uv(texture.size_vec2());
+                        ui.painter().add(Shape::Rect(egui::epaint::RectShape {
+                            rect: Rect::from_center_size(
+                                center,
+                                vec2(cover_r * 2.0, cover_r * 2.0),
+                            ),
+                            rounding: Rounding::same(cover_r), // círculo
+                            fill: Color32::WHITE,
+                            stroke: Stroke::NONE,
+                            fill_texture_id: texture.id(),
+                            uv,
+                        }));
+                    }
+                    None => {
+                        // fallback vinilo (idem celda de portada de la tabla sin
+                        // arte): disco RAISED + icono Disc + centro del fondo
+                        ui.painter().circle_filled(center, cover_r, studio::RAISED);
+                        studio::draw_icon(
+                            ui.painter(),
+                            center,
+                            cover_r * 0.92,
+                            studio::Icon::Disc,
+                            studio::SUBTLE,
+                        );
+                        ui.painter()
+                            .circle_filled(center, cover_r * 0.10, studio::SIDE);
+                    }
+                }
+                // borde desvanecido: anillo del color del panel con alpha 0→1
+                paint_radial_fade(ui.painter(), center, cover_r * 0.80, cover_r, studio::SIDE);
             }
         }
-        // borde desvanecido: anillo del color del panel con alpha 0→1
-        paint_radial_fade(ui.painter(), center, cover_r * 0.80, cover_r, studio::SIDE);
         let hover_key = response
             .hover_pos()
             .and_then(|point| wheel_key_at(point, center, radius));
@@ -1544,17 +1584,21 @@ impl StudioUi {
                 // alto libre reclaman TODO el alto disponible (frame del
                 // widget = alto completo) — aqui SIEMPRE cross-align Min.
                 ui.horizontal(|ui| {
+                    // Cierre (contador pegado): el título se acota a su ancho
+                    // con elipsis "…" (ancho NATURAL) y el contador vive en un
+                    // chip separado — antes quedaba pegado al texto. El chip
+                    // replica el lenguaje de los contadores del sidebar.
+                    let title = self.collection_title(lang, model);
                     let title_width = (ui.available_width() - 335.0).max(100.0);
-                    ui.add_sized(
-                        vec2(title_width, 34.0),
-                        Label::new(
-                            RichText::new(self.collection_title(lang, model))
-                                .size(18.0)
-                                .strong()
-                                .color(studio::TEXT),
+                    let shown = ui.fonts(|fonts| {
+                        studio::ellipsize(
+                            fonts,
+                            &title,
+                            egui::FontId::proportional(18.0),
+                            title_width,
                         )
-                        .truncate(true),
-                    );
+                    });
+                    ui.label(RichText::new(shown).size(18.0).strong().color(studio::TEXT));
                     let count = match self.collection {
                         Collection::All => Some(model.library_count),
                         Collection::Unanalyzed => Some(model.unanalyzed_count),
@@ -1566,7 +1610,15 @@ impl StudioUi {
                             .map(|playlist| playlist.count),
                     };
                     if let Some(count) = count {
-                        ui.label(studio::small(count.to_string(), studio::SUBTLE));
+                        ui.add_space(8.0);
+                        egui::Frame::none()
+                            .fill(studio::RAISED)
+                            .rounding(egui::Rounding::same(10.0))
+                            .inner_margin(egui::Margin::symmetric(9.0, 3.0))
+                            .show(ui, |ui| {
+                                ui.set_height(20.0);
+                                ui.label(studio::small(count.to_string(), studio::SUBTLE));
+                            });
                     }
                     ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                         if ui.available_width() > 270.0 {
@@ -2034,15 +2086,12 @@ impl StudioUi {
                                             // Cierre (elipsis): el texto se acota
                                             // al ancho restante de la celda con
                                             // "…" — antes el corte era en seco.
-                                            let avail =
-                                                (ui.available_width() - 26.0).max(20.0);
+                                            let avail = (ui.available_width() - 26.0).max(20.0);
                                             let shown = ui.fonts(|fonts| {
                                                 studio::ellipsize(
                                                     fonts,
                                                     &track.title,
-                                                    egui::FontId::proportional(
-                                                        TABLE_CELL_FONT,
-                                                    ),
+                                                    egui::FontId::proportional(TABLE_CELL_FONT),
                                                     avail,
                                                 )
                                             });
@@ -3330,6 +3379,29 @@ fn wheel_key_at(point: Pos2, center: Pos2, radius: f32) -> Option<Key> {
     Key::new(number, mode)
 }
 
+/// Cuerpo tipográfico del tono elegido en el centro de la rueda (modo
+/// filtro) — el tamaño del texto grande previo al fix ui-rb2.
+const WHEEL_CENTER_FONT: f32 = 27.0;
+
+/// Qué pinta el centro de la rueda (cierre ítem 11).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WheelCenter {
+    /// Modo FILTRO: la tonalidad elegida por el usuario en texto grande.
+    Key(Key),
+    /// Modo neutro: portada de la pista cargada (None = fallback vinilo).
+    Cover(Option<TrackId>),
+}
+
+/// Decisión PURA del centro de la rueda: la tonalidad elegida manda sobre
+/// la portada — portada SOLO al cargar pista (sin filtro activo), tono
+/// SOLO al filtrar. Nunca ambos a la vez.
+fn wheel_center(compatibility: Option<Key>, loaded_id: Option<TrackId>) -> WheelCenter {
+    match compatibility {
+        Some(key) => WheelCenter::Key(key),
+        None => WheelCenter::Cover(loaded_id),
+    }
+}
+
 fn annular_sector(
     painter: &Painter,
     center: Pos2,
@@ -3687,6 +3759,25 @@ mod tests {
         assert_eq!(outside.to_string(), "3B");
     }
 
+    /// Cierre (ítem 11): el centro de la rueda es CONDICIONAL — el tono
+    /// elegido manda sobre la portada. Portada SOLO sin filtro y con pista
+    /// cargada; tono SOLO al filtrar; jamás ambos.
+    #[test]
+    fn wheel_center_shows_key_only_when_filtering_and_cover_only_when_neutral() {
+        let key_7b = Key::new(7, KeyMode::Major).expect("7B válida");
+        // filtro activo + pista cargada → TONO (la portada no se pinta)
+        assert_eq!(
+            wheel_center(Some(key_7b), Some(42)),
+            WheelCenter::Key(key_7b)
+        );
+        // filtro activo sin pista → TONO igualmente
+        assert_eq!(wheel_center(Some(key_7b), None), WheelCenter::Key(key_7b));
+        // neutro + pista cargada → PORTADA de esa pista
+        assert_eq!(wheel_center(None, Some(42)), WheelCenter::Cover(Some(42)));
+        // neutro sin pista → fallback vinilo (Cover sin id)
+        assert_eq!(wheel_center(None, None), WheelCenter::Cover(None));
+    }
+
     // ---- responsividad (TDD: el painter no decide escalas) ----
 
     #[test]
@@ -3945,7 +4036,10 @@ mod tests {
                     .x;
                 assert!(w <= max + 0.5, "excede el ancho: {w} > {max}");
                 // texto que ya cabe → intacto
-                assert_eq!(studio::ellipsize(fonts, "Short", font.clone(), 500.0), "Short");
+                assert_eq!(
+                    studio::ellipsize(fonts, "Short", font.clone(), 500.0),
+                    "Short"
+                );
             });
         });
     }

@@ -1513,7 +1513,8 @@ impl eframe::App for SmartMixApp {
                 self.tag_drawer_hook_done = true;
                 self.select(rid);
                 let model = self.build_studio_model();
-                self.studio_ui.open_editor(&model, vec![rid], studio_model::EditField::Energy);
+                self.studio_ui
+                    .open_editor(&model, vec![rid], studio_model::EditField::Energy);
                 eprintln!("[qa] SM_TAG_DRAWER: drawer de tags abierto (id={rid})");
             }
         }
