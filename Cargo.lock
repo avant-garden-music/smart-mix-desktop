@@ -3792,7 +3792,7 @@ dependencies = [
 
 [[package]]
 name = "sm-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3819,7 +3819,7 @@ dependencies = [
 
 [[package]]
 name = "sm-audio"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cpal",
@@ -3831,7 +3831,7 @@ dependencies = [
 
 [[package]]
 name = "sm-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "ort",
@@ -3847,7 +3847,7 @@ dependencies = [
 
 [[package]]
 name = "sm-db"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -3861,7 +3861,7 @@ dependencies = [
 
 [[package]]
 name = "sm-export"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "lofty",
@@ -3874,7 +3874,7 @@ dependencies = [
 
 [[package]]
 name = "sm-i18n"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3882,7 +3882,7 @@ dependencies = [
 
 [[package]]
 name = "sm-library"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "lofty",
@@ -3894,7 +3894,7 @@ dependencies = [
 
 [[package]]
 name = "sm-model"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3902,7 +3902,7 @@ dependencies = [
 
 [[package]]
 name = "sm-usb"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
