@@ -19,3 +19,4 @@ desktop.ini
 corpus/
 ground-truth-audio/
 dist/
+sm_shots/
