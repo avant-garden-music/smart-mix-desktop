@@ -32,6 +32,7 @@ jobs:
       - name: Build
         run: cargo build --workspace --verbose
       - name: Higiene (sin menciones de vendors de referencia)
+        shell: bash
         run: |
           # cerrojo legal: falla si algo con estos patrones vuelve a entrar
           ! git grep -ilE "mixed[ _]?in[ _]?key|mikstore|mik_cues|MikStyle" -- . ':!*.lock' ':!.github/workflows/ci.yml'
