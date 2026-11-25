@@ -1901,18 +1901,23 @@ impl StudioUi {
                                         ui.id().with("hdr_chk"),
                                         vec2(18.0, 18.0),
                                         |ui| {
-                                            let mut all = visible.iter().all(|&index| {
+                                            let all = visible.iter().all(|&index| {
                                                 checked_before.contains(&model.tracks[index].id)
                                             });
-                                            if ui
-                                                .checkbox(&mut all, "")
+                                            // checkbox VECTORIAL (fix ux):
+                                            // checked = lavanda + tinta — mismo
+                                            // widget de las filas. El clic
+                                            // invierte el estado actual
+                                            // (todo/parcial), igual que el
+                                            // checkbox de egui que sustituye.
+                                            if studio::row_checkbox(ui, all)
                                                 .on_hover_text(texts::t(
                                                     lang,
                                                     "studio.select_visible",
                                                 ))
-                                                .changed()
+                                                .clicked()
                                             {
-                                                select_all_clicked = Some(all);
+                                                select_all_clicked = Some(!all);
                                             }
                                         },
                                     );
@@ -2029,10 +2034,14 @@ impl StudioUi {
                                             ui.id().with("row_chk"),
                                             vec2(18.0, 18.0),
                                             |ui| {
-                                                if ui
-                                                    .checkbox(&mut checked, "")
+                                                // checkbox VECTORIAL (fix ux):
+                                                // checked = lavanda + tinta,
+                                                // visible sobre la fila
+                                                // seleccionada; el toggle lo
+                                                // resuelve el modelo.
+                                                if studio::row_checkbox(ui, checked)
                                                     .on_hover_text(&hover)
-                                                    .changed()
+                                                    .clicked()
                                                 {
                                                     changed = true;
                                                 }

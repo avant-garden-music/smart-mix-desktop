@@ -517,6 +517,69 @@ pub fn menu_button(ui: &mut egui::Ui, label: &str, icon: Icon) -> egui::Response
     response.on_hover_text(label)
 }
 
+/// Colores del checkbox de fila de la tabla del studio (vector propio).
+///
+/// Bug del dueño: contra el fondo de fila SELECCIONADA (azul, cian 10% =
+/// `SELECTED`) el relleno del checkbox checked se perdía — el checkbox de
+/// egui pinta el mismo relleno translúcido en ambos estados y solo cambia
+/// el trazo fino del check. Contrato (tests en este módulo):
+/// - checked: relleno LIME (lavanda opaco) + glyph de tinta oscura
+///   (LIME_TEXT) + stroke LIME — delta ≥150 de canal sobre fondo normal
+///   (BG) Y sobre la fila seleccionada (SELECTED).
+/// - unchecked: EXACTAMENTE el look de hoy (caja tenue translúcida +
+///   borde LINE) — discreto sobre ambos fondos.
+pub fn row_checkbox_colors(checked: bool) -> (Color32, Color32, Color32) {
+    if checked {
+        (LIME, LIME, LIME_TEXT)
+    } else {
+        // el checkbox de egui de hoy: blanco 15% + borde Variant
+        (
+            Color32::from_rgba_unmultiplied(255, 255, 255, 38),
+            LINE,
+            TEXT,
+        )
+    }
+}
+
+/// Checkbox de fila VECTORIAL de 18px: pintado con `row_checkbox_colors`
+/// (relleno lavanda + tinta oscura cuando está checked) para que el estado
+/// marcado se vea CLARO sobre la fila seleccionada y sobre el fondo
+/// normal. Devuelve la respuesta; el caller decide qué hace con el clic
+/// (mismo contrato de `ui.checkbox` pero sin mutar el bool aquí).
+pub fn row_checkbox(ui: &mut egui::Ui, checked: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+    let (fill, stroke, glyph) = row_checkbox_colors(checked);
+    // hover (solo unchecked): la caja se aviva un paso, sigue discreta
+    let fill = if !checked && response.hovered() {
+        Color32::from_rgba_unmultiplied(255, 255, 255, 64)
+    } else {
+        fill
+    };
+    let box_rect = Rect::from_center_size(rect.center(), vec2(15.0, 15.0));
+    ui.painter()
+        .rect(box_rect, 4.0, fill, Stroke::new(1.5, stroke));
+    if checked {
+        // check mark vectorial (trazo grueso de tinta oscura)
+        let (l, r, t, b) = (
+            box_rect.left(),
+            box_rect.right(),
+            box_rect.top(),
+            box_rect.bottom(),
+        );
+        let c = box_rect.center();
+        ui.painter().add(Shape::line(
+            vec![
+                pos2(l + (r - l) * 0.20, c.y + 0.5),
+                pos2(c.x - (r - l) * 0.06, b - (b - t) * 0.22),
+                pos2(r - (r - l) * 0.18, t + (b - t) * 0.24),
+            ],
+            Stroke::new(2.2, glyph),
+        ));
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, checked, ""));
+    response
+}
+
 /// Centros x de las 5 estrellas del rating_button (paso 13px).
 fn rating_star_centers(rect: Rect) -> [f32; 5] {
     let mut centers = [0.0; 5];
@@ -768,6 +831,83 @@ pub fn draw_icon(painter: &egui::Painter, center: Pos2, size: f32, icon: Icon, c
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- checkbox de fila: visible sobre el fondo de fila seleccionada --
+    //
+    // Bug del dueño: con la fila seleccionada (fondo azul, cian 10%) el
+    // relleno del checkbox checked se PERDÍA. El contrato cromático se
+    // fija con la paleta Studio REAL y una distancia por canales mínima.
+
+    /// Distancia cromática (suma de deltas R+G+B) — delta mínimo medible.
+    fn channel_distance(a: Color32, b: Color32) -> i32 {
+        (a.r() as i32 - b.r() as i32).abs()
+            + (a.g() as i32 - b.g() as i32).abs()
+            + (a.b() as i32 - b.b() as i32).abs()
+    }
+
+    /// Compone un relleno con alpha sobre un fondo de fila (como pinta egui).
+    fn over(bg: Color32, fill: Color32) -> Color32 {
+        let a = fill.a() as f32 / 255.0;
+        let mix = |f: u8, b: u8| (f as f32 * a + b as f32 * (1.0 - a)) as u8;
+        Color32::from_rgb(
+            mix(fill.r(), bg.r()),
+            mix(fill.g(), bg.g()),
+            mix(fill.b(), bg.b()),
+        )
+    }
+
+    /// El checkbox CHECKED tiene que verse CLARO sobre el fondo normal Y
+    /// sobre el fondo azul de la fila seleccionada, distinguirse del estado
+    /// unchecked y llevar un glyph de tinta oscura sobre el relleno.
+    #[test]
+    fn checked_row_checkbox_is_visible_over_selected_and_normal_bg() {
+        let (fill_on, stroke_on, glyph_on) = row_checkbox_colors(true);
+        // sobre la fila SELECCIONADA (cian 10% premezclado = SELECTED)
+        let painted = over(SELECTED, fill_on);
+        assert!(
+            channel_distance(painted, SELECTED) >= 150,
+            "checked {painted:?} se pierde contra la selección {SELECTED:?}"
+        );
+        // y sobre el fondo normal de la tabla (BG)
+        let painted = over(BG, fill_on);
+        assert!(
+            channel_distance(painted, BG) >= 150,
+            "checked {painted:?} se pierde contra el fondo {BG:?}"
+        );
+        // glyph de tinta oscura sobre el relleno lavanda
+        assert!(
+            channel_distance(glyph_on, fill_on) >= 150,
+            "glyph invisible"
+        );
+        // el stroke refuerza el borde sobre la selección
+        assert!(channel_distance(stroke_on, SELECTED) >= 150, "borde tenue");
+        // y el estado checked DIFIERE del unchecked (el bug: hoy no cambia)
+        let (fill_off, _, _) = row_checkbox_colors(false);
+        for bg in [BG, SELECTED] {
+            let delta = channel_distance(over(bg, fill_on), over(bg, fill_off));
+            assert!(
+                delta >= 120,
+                "checked y unchecked se confunden sobre {bg:?} (delta {delta})"
+            );
+        }
+    }
+
+    /// El estado UNCHECKED queda discreto como hoy: tenue sobre ambos
+    /// fondos (el cambio de look es SOLO para el checked).
+    #[test]
+    fn unchecked_row_checkbox_stays_discreet_on_the_row() {
+        let (fill_off, stroke_off, _) = row_checkbox_colors(false);
+        for bg in [BG, SELECTED] {
+            let painted = over(bg, fill_off);
+            assert!(
+                channel_distance(painted, bg) <= 120,
+                "unchecked {painted:?} deja de ser discreto sobre {bg:?}"
+            );
+        }
+        // borde tenue pero presente (LINE sobre BG/SELECTED)
+        assert!(channel_distance(stroke_off, BG) >= 60);
+        assert!(channel_distance(stroke_off, SELECTED) >= 60);
+    }
 
     /// fix ui-rb2: la paleta de energía son EXACTAMENTE los 10 colores de
     /// la leyenda del dueño (muestreados píxel a píxel del PNG adjunto),
