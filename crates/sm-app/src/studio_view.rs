@@ -944,7 +944,9 @@ impl StudioUi {
         // pide conservar el detalle (tempo a la vista) — pintada con
         // painter para no perturbar el layout del transporte. REGLA del
         // dueño: solo hay UN reproductor — antes decía "DECK A"
-        // (format! dinámico); ahora es i18n sin la palabra Deck.
+        // (format! dinámico); ahora es i18n sin la palabra Deck. 'DECK A'
+        // era corto; 'REPRODUCTOR' es más largo → 13px y BPM al borde
+        // derecho de una píldora más ancha (sin solapar el texto).
         {
             let deck_name = texts::t(lang, "studio.player_pill");
             let bpm_txt = model
@@ -953,21 +955,21 @@ impl StudioUi {
                 .as_ref()
                 .and_then(|t| t.bpm)
                 .map(|b| format!("{b:.2}"));
-            let pill = Rect::from_min_size(pos2(rect.left(), top), vec2(122.0, 42.0));
+            let pill = Rect::from_min_size(pos2(rect.left(), top), vec2(148.0, 42.0));
             ui.painter().rect_filled(pill, 8.0, studio::RAISED);
             ui.painter().text(
-                pos2(pill.left() + 11.0, pill.center().y),
+                pos2(pill.left() + 10.0, pill.center().y),
                 egui::Align2::LEFT_CENTER,
                 deck_name,
-                FontId::proportional(14.0),
+                FontId::proportional(13.0),
                 studio::TEXT,
             );
             if let Some(b) = &bpm_txt {
                 ui.painter().text(
-                    pos2(pill.left() + 72.0, pill.center().y),
-                    egui::Align2::LEFT_CENTER,
+                    pos2(pill.right() - 8.0, pill.center().y),
+                    egui::Align2::RIGHT_CENTER,
                     b,
-                    FontId::proportional(14.0),
+                    FontId::proportional(13.0),
                     studio::LILAC,
                 );
             }
@@ -975,7 +977,7 @@ impl StudioUi {
         studio::at(
             ui,
             "studio_transport",
-            Rect::from_min_size(pos2(rect.left() + 134.0, top), vec2(195.0, 42.0)),
+            Rect::from_min_size(pos2(rect.left() + 160.0, top), vec2(195.0, 42.0)),
             |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 5.0;
@@ -1068,7 +1070,9 @@ impl StudioUi {
         );
 
         let utilities_width = 139.0;
-        let cues_left = rect.left() + 351.0; // píldora 134 + transporte 195 + aire 22
+        // píldora 148 + aire 12 + transporte 195 + aire 20 (pill más ancha:
+        // 'REPRODUCTOR' no cabe en los 122 antiguos de 'DECK A')
+        let cues_left = rect.left() + 375.0;
         let cues_right = rect.right() - utilities_width - 22.0;
         let count = model.player.cues.len();
         if count > 0 {
