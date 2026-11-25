@@ -215,6 +215,10 @@ fn table_layout(
 pub struct StudioUi {
     selected: Option<TrackId>,
     checked: BTreeSet<TrackId>,
+    /// Ancla del rango de shift+click: la última fila tocada (checkbox o
+    /// clic simple). Vive JUNTO a `checked` — el rango se integra a la
+    /// MISMA selección de checkboxes (modelo `studio_model::selection`).
+    anchor: Option<TrackId>,
     collection: Collection,
     compatibility: Option<Key>,
     sort: Option<(SortField, bool)>,
@@ -240,6 +244,7 @@ impl Default for StudioUi {
         Self {
             selected: None,
             checked: BTreeSet::new(),
+            anchor: None,
             collection: Collection::All,
             compatibility: None,
             sort: None,
@@ -349,6 +354,13 @@ impl StudioUi {
         self.checked.clone()
     }
 
+    /// Vacía la selección de checkboxes y el ancla del rango (Escape, o la
+    /// app tras quitar pistas de la biblioteca). Único punto de entrada
+    /// para el host: mantiene el contrato del modelo de selección.
+    pub fn clear_selection(&mut self) {
+        crate::studio_model::selection::clear(&mut self.checked, &mut self.anchor);
+    }
+
     #[allow(dead_code)] // API del kit
     pub fn selected_collection(&self) -> Collection {
         self.collection
@@ -390,8 +402,27 @@ impl StudioUi {
             self.selected = visible.first().map(|&index| model.tracks[index].id);
         }
         if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            if self.editor.is_some() || self.popover.is_some() {
+                self.editor = None;
+                self.popover = None;
+            } else if !ctx.wants_keyboard_input() {
+                // Escape sin overlays: vacía la selección de checkboxes y el
+                // ancla del rango (mismo modelo, sin selección paralela).
+                crate::studio_model::selection::clear(&mut self.checked, &mut self.anchor);
+            }
+        }
+        // ctrl+A: TODA la vista visible entra a la MISMA selección de
+        // checkboxes. Con un campo de texto enfocado (búsqueda) egui pide
+        // el teclado → el atajo le pertenece (seleccionar todo el texto).
+        if !ctx.wants_keyboard_input()
+            && ctx.input(|input| input.key_pressed(egui::Key::A) && input.modifiers.ctrl)
+        {
+            let visible_ids: Vec<TrackId> = visible
+                .iter()
+                .map(|&index| model.tracks[index].id)
+                .collect();
+            crate::studio_model::selection::select_all(&mut self.checked, &visible_ids);
             self.editor = None;
-            self.popover = None;
         }
 
         TopBottomPanel::top("smart_mix_studio_appbar")
@@ -1768,10 +1799,19 @@ impl StudioUi {
             }
         }
         let table_height = (ui.available_height() - 36.0 - 14.0).max(96.0);
+        // selección por rango (shift+click): orden visible y shift leídos
+        // ANTES de la tabla, igual que sort_state — las clausuras de
+        // header/body toman `self` mutably y no pueden releerlo dentro.
+        let visible_ids: Vec<TrackId> = visible
+            .iter()
+            .map(|&index| model.tracks[index].id)
+            .collect();
+        let shift_held = ui.input(|input| input.modifiers.shift);
         {
             let mut sort_clicked = None;
             let mut select_all_clicked = None;
             let mut clicked_track = None;
+            let mut range_clicked = None;
             let mut double_clicked_track = None;
             let mut clicked_menu = None;
             let checked_before = self.checked.clone();
@@ -1998,13 +2038,26 @@ impl StudioUi {
                                             },
                                         );
                                         if changed {
-                                            if checked {
-                                                self.checked.insert(track.id);
+                                            // shift+checkbox = RANGO desde el ancla
+                                            // (Gmail): NO alterna — extiende la
+                                            // MISMA selección hasta esta fila.
+                                            if shift_held {
+                                                crate::studio_model::selection::range_add(
+                                                    &mut self.checked,
+                                                    &mut self.anchor,
+                                                    track.id,
+                                                    &visible_ids,
+                                                );
+                                                self.editor = None;
                                             } else {
-                                                self.checked.remove(&track.id);
+                                                crate::studio_model::selection::toggle(
+                                                    &mut self.checked,
+                                                    &mut self.anchor,
+                                                    track.id,
+                                                );
+                                                self.selected = Some(track.id);
+                                                self.editor = None;
                                             }
-                                            self.selected = Some(track.id);
-                                            self.editor = None;
                                             child_handled = true;
                                         }
                                     });
@@ -2279,7 +2332,14 @@ impl StudioUi {
                                     });
                                     let response = row.response();
                                     if response.clicked() && !child_handled {
-                                        clicked_track = Some(track.id);
+                                        if shift_held {
+                                            // shift+clic de FILA: rango desde el ancla
+                                            // dentro de la MISMA selección de
+                                            // checkboxes — nunca la vacía.
+                                            range_clicked = Some(track.id);
+                                        } else {
+                                            clicked_track = Some(track.id);
+                                        }
                                     }
                                     if response.double_clicked() {
                                         double_clicked_track = Some(track.id);
@@ -2307,13 +2367,28 @@ impl StudioUi {
                         self.checked.remove(&id);
                     }
                 }
+                if !select {
+                    // desmarcar TODO también suelta el ancla del rango
+                    self.anchor = None;
+                }
                 self.editor = None;
             }
             if let Some(id) = clicked_track {
                 self.selected = Some(id);
                 self.checked.clear();
+                // clic simple: la fila queda como ancla del próximo rango
+                self.anchor = Some(id);
                 self.editor = None;
                 actions.push(Action::SelectTrack(id));
+            }
+            if let Some(id) = range_clicked {
+                crate::studio_model::selection::range_add(
+                    &mut self.checked,
+                    &mut self.anchor,
+                    id,
+                    &visible_ids,
+                );
+                self.editor = None;
             }
             if let Some(id) = double_clicked_track {
                 // doble clic = seleccionar y reproducir (comportamiento real)
@@ -4179,6 +4254,19 @@ mod tests {
         sui: &mut StudioUi,
         model: &Model,
     ) -> Vec<Action> {
+        frame_mod(ctx, time, events, egui::Modifiers::default(), sui, model)
+    }
+
+    /// `frame` con modificadores de teclado: egui 0.27 lee los modifiers
+    /// del `RawInput` (no de los eventos), así que shift/ctrl van ahí.
+    fn frame_mod(
+        ctx: &egui::Context,
+        time: f64,
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+        sui: &mut StudioUi,
+        model: &Model,
+    ) -> Vec<Action> {
         let ri = egui::RawInput {
             time: Some(time),
             screen_rect: Some(egui::Rect::from_min_size(
@@ -4186,6 +4274,7 @@ mod tests {
                 egui::vec2(1400.0, 900.0),
             )),
             events,
+            modifiers,
             ..Default::default()
         };
         let mut out = Vec::new();
@@ -4306,6 +4395,202 @@ mod tests {
             a4.iter().any(|a| matches!(a, Action::LoadAndPlay(33))),
             "doble clic en fila 3 debe emitir LoadAndPlay(33): {a4:?}"
         );
+    }
+
+    // -- selección shift+click / ctrl+A / Escape (egui real + input sintético) --
+
+    /// Como `click_at` pero con modificadores (shift/ctrl) y botón elegido.
+    fn click_at_mod(
+        ctx: &egui::Context,
+        sui: &mut StudioUi,
+        model: &Model,
+        x: f32,
+        y: f32,
+        t0: f64,
+        modifiers: egui::Modifiers,
+        button: egui::PointerButton,
+    ) -> Vec<Action> {
+        let pos = pos2(x, y);
+        let _ = frame_mod(
+            ctx,
+            t0,
+            vec![egui::Event::PointerMoved(pos)],
+            modifiers,
+            sui,
+            model,
+        );
+        let _ = frame_mod(
+            ctx,
+            t0 + 0.01,
+            vec![egui::Event::PointerButton {
+                pos,
+                button,
+                pressed: true,
+                modifiers,
+            }],
+            modifiers,
+            sui,
+            model,
+        );
+        frame_mod(
+            ctx,
+            t0 + 0.02,
+            vec![egui::Event::PointerButton {
+                pos,
+                button,
+                pressed: false,
+                modifiers,
+            }],
+            modifiers,
+            sui,
+            model,
+        )
+    }
+
+    #[test]
+    fn shift_click_selects_the_range_from_the_anchor() {
+        // el RANGO vive en la MISMA selección de checkboxes: clic simple en
+        // la fila 2 (ancla), shift+clic en la fila 4 → filas 2..4 quedan
+        // checked (sin borrar lo que ya había).
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut sui = StudioUi::new();
+        let model = Model {
+            tracks: vec![
+                sample_track(11, "Alpha", 120.0),
+                sample_track(22, "Beta", 121.0),
+                sample_track(33, "Gamma", 122.0),
+                sample_track(44, "Delta", 123.0),
+            ],
+            library_count: 4,
+            ..Model::default()
+        };
+        let _ = frame(&ctx, 0.0, vec![], &mut sui, &model);
+        // localizar las filas con el barrido del test de doble clic
+        // (los barridos van PRIMERO: cada clic del barrido mueve el ancla)
+        let mut clock = 200.0;
+        let find = |ctx: &egui::Context, sui: &mut StudioUi, want: TrackId, clock: &mut f64| {
+            let mut y = 380.0;
+            let mut hits = Vec::new();
+            while y < 620.0 {
+                *clock += 0.4;
+                let actions = click_at(ctx, sui, &model, 500.0, y, *clock);
+                if actions
+                    .iter()
+                    .any(|a| matches!(a, Action::SelectTrack(id) if *id == want))
+                {
+                    hits.push(y);
+                }
+                y += 6.0;
+            }
+            assert!(!hits.is_empty(), "no se encontró la fila de {want}");
+            hits[hits.len() / 2]
+        };
+        let y2 = find(&ctx, &mut sui, 22, &mut clock);
+        let y4 = find(&ctx, &mut sui, 44, &mut clock);
+        clock += 1.0;
+        // clic simple: fila 2 seleccionada (y anclada)
+        let a1 = click_at(&ctx, &mut sui, &model, 500.0, y2, clock);
+        assert!(a1.iter().any(|a| matches!(a, Action::SelectTrack(22))));
+        assert!(sui.checked_tracks().is_empty(), "clic simple limpia");
+        // shift+clic en la fila 4: rango 2..4 dentro de la MISMA selección
+        let shift = egui::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let a2 = click_at_mod(
+            &ctx,
+            &mut sui,
+            &model,
+            500.0,
+            y4,
+            clock + 1.0,
+            shift,
+            egui::PointerButton::Primary,
+        );
+        // el rango no reproduce ni selecciona-unica: NADA de LoadAndPlay y
+        // la selección de checkboxes gana a la selección simple
+        assert!(
+            !a2.iter().any(|a| matches!(a, Action::LoadAndPlay(_))),
+            "shift+clic no debe reproducir: {a2:?}"
+        );
+        let got: Vec<TrackId> = sui.checked_tracks().into_iter().collect();
+        assert_eq!(got, vec![22, 33, 44], "rango 2..4 checked: {got:?}");
+        // Escape vacía la selección (la barra de "N seleccionadas" desaparece
+        // y la tabla recupera su layout — las Y vuelven a ser válidas)
+        let _ = frame_mod(
+            &ctx,
+            clock + 3.0,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+            egui::Modifiers::default(),
+            &mut sui,
+            &model,
+        );
+        assert!(sui.checked_tracks().is_empty(), "Escape vacía la selección");
+        // descendente: clic simple en la fila 4 (ancla) y shift+clic en la 2
+        // → el MISMO rango, sin importar la dirección
+        let a4 = click_at(&ctx, &mut sui, &model, 500.0, y4, clock + 3.5);
+        assert!(a4.iter().any(|a| matches!(a, Action::SelectTrack(44))));
+        let a5 = click_at_mod(
+            &ctx,
+            &mut sui,
+            &model,
+            500.0,
+            y2,
+            clock + 4.5,
+            shift,
+            egui::PointerButton::Primary,
+        );
+        assert!(!a5.iter().any(|a| matches!(a, Action::LoadAndPlay(_))));
+        let got: Vec<TrackId> = sui.checked_tracks().into_iter().collect();
+        assert_eq!(got, vec![22, 33, 44], "rango descendente idéntico: {got:?}");
+    }
+
+    #[test]
+    fn ctrl_a_selects_all_and_escape_empties_the_selection() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut sui = StudioUi::new();
+        let model = Model {
+            tracks: vec![
+                sample_track(11, "Alpha", 120.0),
+                sample_track(22, "Beta", 121.0),
+                sample_track(33, "Gamma", 122.0),
+            ],
+            library_count: 3,
+            ..Model::default()
+        };
+        let _ = frame(&ctx, 0.0, vec![], &mut sui, &model);
+        let ctrl_a = vec![egui::Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        }];
+        let _ = frame_mod(&ctx, 1.0, ctrl_a, egui::Modifiers::CTRL, &mut sui, &model);
+        let got: Vec<TrackId> = sui.checked_tracks().into_iter().collect();
+        assert_eq!(got, vec![11, 22, 33], "ctrl+A selecciona toda la vista");
+        // Escape vacía la selección (y el ancla: un shift posterior no
+        // resucita el rango viejo)
+        let esc = vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }];
+        let _ = frame(&ctx, 2.0, esc, &mut sui, &model);
+        assert!(sui.checked_tracks().is_empty(), "Escape vacía la selección");
     }
 
     // ---- resize de columnas: el asa existe, es visible y responde ------

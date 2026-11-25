@@ -14,6 +14,69 @@ use std::{fmt, str::FromStr};
 
 pub type TrackId = i64;
 
+/// Selección de filas de la tabla del studio: el conjunto de CHECKBOXES y
+/// el ANCLA de rango viven juntos (shift+click integra al MISMO conjunto,
+/// no una selección paralela). Funciones puras: la vista las llama en sus
+/// puntos de integración (checkbox, shift+click de fila, ctrl+A, Escape) y
+/// los tests fijan el contrato sin egui.
+pub mod selection {
+    use std::collections::BTreeSet;
+
+    /// Checkbox simple: alterna la pista y la marca como ANCLA del rango
+    /// (marcar o desmarcar: la última fila tocada por el usuario manda).
+    pub fn toggle(checked: &mut BTreeSet<i64>, anchor: &mut Option<i64>, id: i64) {
+        if !checked.insert(id) {
+            checked.remove(&id);
+        }
+        *anchor = Some(id);
+    }
+
+    /// shift+click: añade a la selección el rango [ancla..target] según el
+    /// ORDEN VISIBLE (ascendente o descendente, da igual). El ancla NO se
+    /// mueve — shift+clicks sucesivos extienden o encogen el rango desde
+    /// ella. Sin ancla (o ancla fuera de la vista actual) la fila queda
+    /// sola y pasa a ser el ancla nueva: nunca se inventa un rango.
+    pub fn range_add(
+        checked: &mut BTreeSet<i64>,
+        anchor: &mut Option<i64>,
+        target: i64,
+        visible: &[i64],
+    ) {
+        let range = anchor
+            .and_then(|a| visible.iter().position(|&id| id == a))
+            .and_then(|from| {
+                visible
+                    .iter()
+                    .position(|&id| id == target)
+                    .map(|to| (from, to))
+            })
+            .map(|(from, to)| {
+                let (lo, hi) = (from.min(to), from.max(to));
+                &visible[lo..=hi]
+            });
+        match range {
+            Some(ids) => checked.extend(ids.iter().copied()),
+            None => {
+                // sin ancla válida: fila sola + ancla nueva
+                checked.insert(target);
+                *anchor = Some(target);
+            }
+        }
+    }
+
+    /// ctrl+A: TODA la vista visible entra a la selección (acumula sobre
+    /// lo que ya había; el ancla no se toca).
+    pub fn select_all(checked: &mut BTreeSet<i64>, visible: &[i64]) {
+        checked.extend(visible.iter().copied());
+    }
+
+    /// Escape: selección y ancla vacías.
+    pub fn clear(checked: &mut BTreeSet<i64>, anchor: &mut Option<i64>) {
+        checked.clear();
+        *anchor = None;
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum KeyMode {
     Minor,
@@ -373,6 +436,115 @@ pub enum DeviceOp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- selección por rango (shift+click / ctrl+A / Escape): modelo puro --
+    //
+    // El conjunto de checkboxes y el ancla de rango viven JUNTOS: las
+    // funciones son puras para poder fijar el contrato (ascendente,
+    // descendente, mixto, total, vacío) antes de tocar la vista.
+
+    fn sel() -> (std::collections::BTreeSet<TrackId>, Option<TrackId>) {
+        (std::collections::BTreeSet::new(), None)
+    }
+
+    fn ids(set: &std::collections::BTreeSet<TrackId>) -> Vec<TrackId> {
+        set.iter().copied().collect()
+    }
+
+    #[test]
+    fn range_from_anchor_covers_asc_and_desc() {
+        let visible: Vec<TrackId> = vec![1, 2, 3, 4, 5];
+        // ascendente: checkbox en 2, shift+click en 5 → 2..5
+        let (mut c, mut a) = sel();
+        selection::toggle(&mut c, &mut a, 2);
+        selection::range_add(&mut c, &mut a, 5, &visible);
+        assert_eq!(ids(&c), vec![2, 3, 4, 5]);
+        // descendente: ancla 5, shift+click en 2 → el MISMO rango
+        let (mut c, mut a) = sel();
+        selection::toggle(&mut c, &mut a, 5);
+        selection::range_add(&mut c, &mut a, 2, &visible);
+        assert_eq!(ids(&c), vec![2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn anchor_survives_mixed_checkbox_and_shift_selections() {
+        // selecciones MIXTAS: checkbox 1, shift→3, checkbox 7, shift→9.
+        // El rango se integra a la MISMA selección (unión, nunca la vacía).
+        let visible: Vec<TrackId> = (1..=10).collect();
+        let (mut c, mut a) = sel();
+        selection::toggle(&mut c, &mut a, 1);
+        selection::range_add(&mut c, &mut a, 3, &visible);
+        assert_eq!(ids(&c), vec![1, 2, 3]);
+        selection::toggle(&mut c, &mut a, 7);
+        selection::range_add(&mut c, &mut a, 9, &visible);
+        assert_eq!(ids(&c), vec![1, 2, 3, 7, 8, 9]);
+        // el último checkbox movió el ancla: un shift posterior parte de ahí
+        assert_eq!(a, Some(7));
+        selection::range_add(&mut c, &mut a, 10, &visible);
+        assert_eq!(ids(&c), vec![1, 2, 3, 7, 8, 9, 10]);
+    }
+
+    #[test]
+    fn ctrl_a_selects_the_whole_visible_view() {
+        let visible: Vec<TrackId> = vec![4, 8, 15, 16];
+        let (mut c, mut a) = sel();
+        selection::toggle(&mut c, &mut a, 8);
+        // ctrl+A acumula la vista COMPLETA sobre lo que ya había
+        selection::select_all(&mut c, &visible);
+        assert_eq!(ids(&c), vec![4, 8, 15, 16]);
+        // el ancla no se toca: sigue apuntando a la última fila tocada
+        assert_eq!(a, Some(8));
+    }
+
+    #[test]
+    fn escape_empties_selection_and_anchor() {
+        let visible: Vec<TrackId> = (1..=6).collect();
+        let (mut c, mut a) = sel();
+        selection::toggle(&mut c, &mut a, 2);
+        selection::range_add(&mut c, &mut a, 6, &visible);
+        assert!(!c.is_empty());
+        selection::clear(&mut c, &mut a);
+        assert!(c.is_empty());
+        assert_eq!(a, None);
+    }
+
+    #[test]
+    fn range_without_anchor_selects_just_that_row_and_becomes_anchor() {
+        let visible: Vec<TrackId> = vec![10, 20, 30];
+        let (mut c, mut a) = sel();
+        selection::range_add(&mut c, &mut a, 20, &visible);
+        assert_eq!(ids(&c), vec![20]);
+        assert_eq!(a, Some(20));
+        // y un shift posterior ya tiene de dónde partir
+        selection::range_add(&mut c, &mut a, 30, &visible);
+        assert_eq!(ids(&c), vec![20, 30]);
+    }
+
+    #[test]
+    fn stale_anchor_outside_the_view_reanchors_to_the_clicked_row() {
+        // el ancla cayó fuera de la vista (filtro/colección cambió):
+        // el shift+click no puede inventar un rango — ancla nueva.
+        let visible: Vec<TrackId> = vec![100, 200, 300];
+        let (mut c, mut a) = sel();
+        a = Some(7); // 7 ya no está en la vista
+        selection::range_add(&mut c, &mut a, 200, &visible);
+        assert_eq!(ids(&c), vec![200]);
+        assert_eq!(a, Some(200));
+    }
+
+    #[test]
+    fn unchecking_keeps_the_row_as_anchor() {
+        // desmarcar un checkbox también marca el ancla: el siguiente
+        // shift parte de la fila que el usuario acaba de tocar.
+        let visible: Vec<TrackId> = vec![1, 2, 3, 4];
+        let (mut c, mut a) = sel();
+        selection::toggle(&mut c, &mut a, 3);
+        selection::toggle(&mut c, &mut a, 3); // desmarcar
+        assert!(c.is_empty());
+        assert_eq!(a, Some(3));
+        selection::range_add(&mut c, &mut a, 1, &visible);
+        assert_eq!(ids(&c), vec![1, 2, 3]);
+    }
 
     #[test]
     fn harmonic_wheel_wraps_and_keeps_mode() {
