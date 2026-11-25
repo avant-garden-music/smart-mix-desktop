@@ -769,7 +769,10 @@ impl StudioUi {
                         studio::Tone::Raised
                     };
                     if studio::button_size(ui, &deck.to_string(), None, tone, vec2(26.0, 25.0))
-                        .on_hover_text(format!("Deck {deck}"))
+                        .on_hover_text(
+                            texts::t(lang, "studio.deck_hover")
+                                .replace("{deck}", &deck.to_string()),
+                        )
                         .clicked()
                     {
                         actions.push(Action::SetDeck(deck));
@@ -937,11 +940,13 @@ impl StudioUi {
         actions: &mut Vec<Action>,
     ) {
         let top = rect.top() + 11.0;
-        // píldora izquierda DECK + BPM: el kit la omitía y el usuario pide
-        // conservar el detalle (deck activo + tempo a la vista) — pintada
-        // con painter para no perturbar el layout del transporte
+        // píldora izquierda REPRODUCTOR + BPM: el kit la omitía y el usuario
+        // pide conservar el detalle (tempo a la vista) — pintada con
+        // painter para no perturbar el layout del transporte. REGLA del
+        // dueño: solo hay UN reproductor — antes decía "DECK A"
+        // (format! dinámico); ahora es i18n sin la palabra Deck.
         {
-            let deck_name = format!("DECK {}", model.player.deck);
+            let deck_name = texts::t(lang, "studio.player_pill");
             let bpm_txt = model
                 .player
                 .track

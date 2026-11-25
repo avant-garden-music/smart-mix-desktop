@@ -183,6 +183,10 @@ fn en(key: &str, fallback: String) -> String {
         "ctx.copy_path" => "Copy path".into(),
         "ctx.remove" => "Remove from library…".into(),
         "ctx.export_queue" => "Add to export queue".into(),
+        // Regla del dueño: la píldora del transporte anuncia el REPRODUCTOR
+        // (antes "DECK A" via format! dinámico), nunca "Deck".
+        "studio.player_pill" => "PLAYER".into(),
+        "studio.deck_hover" => "Player {deck}".into(),
         "menu.rename_playlist" => "Rename…".into(),
         "menu.delete_playlist" => "Delete".into(),
         "usb.backup" => "Verified backup…".into(),
@@ -367,6 +371,10 @@ fn es(key: &str) -> String {
         "ctx.copy_path" => "Copiar ruta".into(),
         "ctx.remove" => "Quitar de la biblioteca…".into(),
         "ctx.export_queue" => "Añadir a cola de export".into(),
+        // Regla del dueño: la píldora del transporte anuncia el REPRODUCTOR
+        // (antes "DECK A" via format! dinámico), nunca "Deck".
+        "studio.player_pill" => "REPRODUCTOR".into(),
+        "studio.deck_hover" => "Reproductor {deck}".into(),
         "menu.rename_playlist" => "Renombrar…".into(),
         "menu.delete_playlist" => "Eliminar".into(),
         "usb.backup" => "Copia de seguridad verificada…".into(),
@@ -467,6 +475,35 @@ mod tests {
             let text = super::t(lang, "studio.loaded_deck");
             assert!(!text.contains("Deck"), "{lang} dice Deck: {text}");
             assert!(!text.is_empty(), "{lang}: la clave quedó vacía");
+        }
+    }
+
+    /// Barrido final de la regla: la PÍLDORA del transporte decía "DECK A"
+    /// (format! dinámico, invisible para grep de literales) y el tooltip de
+    /// los botones A/B decía "Deck A". Ambos pasan a i18n SIN la palabra
+    /// Deck — el transporte anuncia el reproductor y el tempo, nada más.
+    #[test]
+    fn transport_pill_and_deck_hover_never_say_deck() {
+        for lang in ["es", "en", "fr"] {
+            let pill = super::t(lang, "studio.player_pill");
+            assert_eq!(
+                pill,
+                if lang == "es" {
+                    "REPRODUCTOR"
+                } else {
+                    "PLAYER"
+                }
+            );
+            assert!(!pill.to_uppercase().contains("DECK"), "{lang}: {pill}");
+            let hover = super::t(lang, "studio.deck_hover");
+            assert!(
+                !hover.contains("Deck"),
+                "{lang} dice Deck en el tooltip: {hover}"
+            );
+            assert!(
+                hover.contains("{deck}"),
+                "{lang}: el tooltip necesita el placeholder {{deck}}: {hover}"
+            );
         }
     }
 }
