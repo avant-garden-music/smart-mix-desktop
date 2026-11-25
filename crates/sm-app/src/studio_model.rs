@@ -296,7 +296,7 @@ impl Default for Model {
 
 /// `None` = sin cambio. La app es la dueña de la autorización por campo y
 /// de las reglas de validación del editor de tags real.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct TagPatch {
     pub title: Option<String>,
     pub artist: Option<String>,
@@ -306,7 +306,7 @@ pub struct TagPatch {
     pub rating: Option<u8>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Import,
     Analyze(Vec<TrackId>),
@@ -365,6 +365,31 @@ pub enum Action {
     OpenSettings,
     /// Abre la ventana "Acerca de".
     OpenAbout,
+    /// Menú contextual de fila — Cargar pista: al reproductor SIN
+    /// reproducir (el deck queda listo; nada suena hasta Play/Preview).
+    LoadTrack(TrackId),
+    /// Menú contextual de fila — Ver detalles: abre la vista Track Detail.
+    ViewDetails(TrackId),
+    /// Menú contextual de fila — Revelar en Explorer: SOLO abre la ventana
+    /// del Explorer con el archivo seleccionado. Jamás toca archivos.
+    RevealInExplorer(TrackId),
+    /// Menú contextual de fila — Copiar título/artista/ruta al portapapeles.
+    CopyTrackField {
+        id: TrackId,
+        field: TrackField,
+    },
+    /// Menú contextual de fila — Quitar de la biblioteca: SOLO base de
+    /// datos. La app pide confirmación con conteo ANTES de tocar nada y
+    /// NUNCA borra archivos de disco.
+    RemoveFromLibrary(Vec<TrackId>),
+}
+
+/// Campo de pista copiable al portapapeles desde el menú contextual.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrackField {
+    Title,
+    Artist,
+    Path,
 }
 
 /// Campo del editor de tags que recibe el foco al abrir el drawer.
@@ -384,6 +409,175 @@ pub enum Popover {
     Analysis,
     Pitch,
     AddToPlaylist,
+}
+
+/// Item del menú contextual de fila (click derecho). La VISIBILIDAD es pura
+/// y depende SOLO de cuántas pistas abren el menú: con N>1 quedan
+/// exclusivamente las acciones seguras en lote.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TrackMenuItem {
+    /// Cargar pista en el reproductor (sin reproducir) — single.
+    Load,
+    /// Preview: cargar y reproducir (mismo ruteo que el doble clic) — single.
+    Preview,
+    /// Filtrar compatibles: activa la rueda en el tono de la pista — single.
+    FilterCompatible,
+    EditTags,
+    /// Editar energía (submenú 1..=10) — lote vía ApplyTags.
+    Energy,
+    /// Valoración (submenú 0..=5) — lote vía Rate por pista.
+    Rating,
+    /// Añadir a playlist (submenú) — lote vía AddToPlaylist.
+    AddToPlaylist,
+    Reanalyze,
+    /// Ver detalles (Track Detail) — single.
+    ViewDetails,
+    /// Revelar en Explorer — single.
+    Reveal,
+    /// Copiar título/artista/ruta — single.
+    CopyTitle,
+    CopyArtist,
+    CopyPath,
+    /// Quitar de la biblioteca (SOLO BD, con confirmación y conteo).
+    Remove,
+    /// Añadir a cola de export (mismo ruteo que el '···').
+    ExportQueue,
+}
+
+/// Menú de UNA pista: ítems single-only + los seguros en lote.
+pub const CONTEXT_MENU_SINGLE: [TrackMenuItem; 15] = [
+    TrackMenuItem::Load,
+    TrackMenuItem::Preview,
+    TrackMenuItem::FilterCompatible,
+    TrackMenuItem::EditTags,
+    TrackMenuItem::Energy,
+    TrackMenuItem::Rating,
+    TrackMenuItem::AddToPlaylist,
+    TrackMenuItem::Reanalyze,
+    TrackMenuItem::ViewDetails,
+    TrackMenuItem::Reveal,
+    TrackMenuItem::CopyTitle,
+    TrackMenuItem::CopyArtist,
+    TrackMenuItem::CopyPath,
+    TrackMenuItem::Remove,
+    TrackMenuItem::ExportQueue,
+];
+
+/// Menú de N>1 pistas: SOLO acciones seguras en lote — sin preview,
+/// filtrar, cargar, revelar, detalles ni copiar.
+pub const CONTEXT_MENU_MULTI: [TrackMenuItem; 7] = [
+    TrackMenuItem::EditTags,
+    TrackMenuItem::Energy,
+    TrackMenuItem::Rating,
+    TrackMenuItem::AddToPlaylist,
+    TrackMenuItem::Reanalyze,
+    TrackMenuItem::Remove,
+    TrackMenuItem::ExportQueue,
+];
+
+/// Ítems VISIBLES según cuántas pistas abren el menú.
+pub fn context_menu_items(target_count: usize) -> &'static [TrackMenuItem] {
+    if target_count == 1 {
+        &CONTEXT_MENU_SINGLE
+    } else {
+        &CONTEXT_MENU_MULTI
+    }
+}
+
+/// Parámetro del ítem elegido (submenús de energía/valoración/playlist y
+/// el tono de "filtrar compatibles").
+#[derive(Clone, Copy, Debug)]
+pub enum MenuParam {
+    None,
+    Energy(u8),
+    Rating(u8),
+    Playlist(i64),
+    Key(Key),
+}
+
+/// Destino del ruteo COMPARTIDO de los menús de fila: el click derecho y
+/// el '···' emiten EXACTAMENTE los mismos `Action` (mismo dispatcher) o
+/// abren el MISMO editor de tags de la vista.
+#[derive(Clone, Debug)]
+pub enum MenuRoute {
+    Actions(Vec<Action>),
+    TagEditor(Vec<TrackId>),
+}
+
+/// Resuelve ítem + parámetros → ruteo. Devuelve `None` si el ítem es
+/// single-only con N>1 (defensivo: el menú ya no lo muestra) o si el
+/// parámetro no corresponde al ítem (nunca inventa rutas).
+pub fn menu_route(item: TrackMenuItem, targets: &[TrackId], param: MenuParam) -> Option<MenuRoute> {
+    // single-only EXIGE exactamente una pista: con N>1 el ruteo se niega
+    // (el menú ya no los muestra; esto es la segunda barrera).
+    let single = || targets.first().filter(|_| targets.len() == 1).copied();
+    let batch = || targets.to_vec();
+    let one_action = |action: Action| Some(MenuRoute::Actions(vec![action]));
+    match item {
+        TrackMenuItem::Load => single().map(|id| MenuRoute::Actions(vec![Action::LoadTrack(id)])),
+        TrackMenuItem::Preview => {
+            single().map(|id| MenuRoute::Actions(vec![Action::LoadAndPlay(id)]))
+        }
+        TrackMenuItem::FilterCompatible => match param {
+            MenuParam::Key(key) => one_action(Action::SetCompatibility(Some(key))),
+            _ => None,
+        },
+        TrackMenuItem::EditTags => Some(MenuRoute::TagEditor(batch())),
+        TrackMenuItem::Energy => match param {
+            MenuParam::Energy(level) => Some(MenuRoute::Actions(vec![Action::ApplyTags {
+                track_ids: batch(),
+                patch: TagPatch {
+                    energy: Some(level),
+                    ..TagPatch::default()
+                },
+            }])),
+            _ => None,
+        },
+        TrackMenuItem::Rating => match param {
+            MenuParam::Rating(rating) => {
+                let actions = targets
+                    .iter()
+                    .map(|&track_id| Action::Rate { track_id, rating })
+                    .collect();
+                Some(MenuRoute::Actions(actions))
+            }
+            _ => None,
+        },
+        TrackMenuItem::AddToPlaylist => match param {
+            MenuParam::Playlist(playlist_id) => one_action(Action::AddToPlaylist {
+                playlist_id,
+                track_ids: batch(),
+            }),
+            _ => None,
+        },
+        TrackMenuItem::Reanalyze => one_action(Action::Analyze(batch())),
+        TrackMenuItem::ViewDetails => {
+            single().map(|id| MenuRoute::Actions(vec![Action::ViewDetails(id)]))
+        }
+        TrackMenuItem::Reveal => {
+            single().map(|id| MenuRoute::Actions(vec![Action::RevealInExplorer(id)]))
+        }
+        TrackMenuItem::CopyTitle => single().map(|id| {
+            MenuRoute::Actions(vec![Action::CopyTrackField {
+                id,
+                field: TrackField::Title,
+            }])
+        }),
+        TrackMenuItem::CopyArtist => single().map(|id| {
+            MenuRoute::Actions(vec![Action::CopyTrackField {
+                id,
+                field: TrackField::Artist,
+            }])
+        }),
+        TrackMenuItem::CopyPath => single().map(|id| {
+            MenuRoute::Actions(vec![Action::CopyTrackField {
+                id,
+                field: TrackField::Path,
+            }])
+        }),
+        TrackMenuItem::Remove => one_action(Action::RemoveFromLibrary(batch())),
+        TrackMenuItem::ExportQueue => one_action(Action::Export(batch())),
+    }
 }
 
 /// Campo de ordenación de la tabla (solo presentación: la vista ordena lo
@@ -544,6 +738,196 @@ mod tests {
         assert_eq!(a, Some(3));
         selection::range_add(&mut c, &mut a, 1, &visible);
         assert_eq!(ids(&c), vec![1, 2, 3]);
+    }
+
+    // -- menú contextual de fila: visibilidad single/multi + ruteo compartido --
+
+    #[test]
+    fn single_context_menu_shows_the_full_item_list() {
+        let items = context_menu_items(1);
+        assert_eq!(items, &CONTEXT_MENU_SINGLE);
+        assert_eq!(items.len(), 15);
+        // el orden del spec: cargar, preview, filtrar… y quitar/export al final
+        assert_eq!(items[0], TrackMenuItem::Load);
+        assert_eq!(items[1], TrackMenuItem::Preview);
+        assert_eq!(items[2], TrackMenuItem::FilterCompatible);
+        assert_eq!(items[13], TrackMenuItem::Remove);
+        assert_eq!(items[14], TrackMenuItem::ExportQueue);
+    }
+
+    #[test]
+    fn multi_context_menu_hides_single_only_and_keeps_batch_safe() {
+        let items = context_menu_items(2);
+        assert_eq!(items, &CONTEXT_MENU_MULTI);
+        for single_only in [
+            TrackMenuItem::Load,
+            TrackMenuItem::Preview,
+            TrackMenuItem::FilterCompatible,
+            TrackMenuItem::ViewDetails,
+            TrackMenuItem::Reveal,
+            TrackMenuItem::CopyTitle,
+            TrackMenuItem::CopyArtist,
+            TrackMenuItem::CopyPath,
+        ] {
+            assert!(
+                !items.contains(&single_only),
+                "con N>1 NO se muestra {single_only:?}"
+            );
+        }
+        // y el lote seguro queda completo
+        for batch_safe in [
+            TrackMenuItem::EditTags,
+            TrackMenuItem::Energy,
+            TrackMenuItem::Rating,
+            TrackMenuItem::AddToPlaylist,
+            TrackMenuItem::Reanalyze,
+            TrackMenuItem::Remove,
+            TrackMenuItem::ExportQueue,
+        ] {
+            assert!(items.contains(&batch_safe), "falta en lote {batch_safe:?}");
+        }
+    }
+
+    /// El ruteo del click derecho emite EXACTAMENTE los mismos `Action`
+    /// que ya usan el menú '···' de la fila, el doble clic, la rueda y el
+    /// popover de playlists — cero lógica duplicada.
+    #[test]
+    fn menu_routes_reuse_the_same_actions_as_the_row_menu() {
+        let id = 7;
+        // '···' → Re-analizar: Action::Analyze(vec![id])
+        let MenuRoute::Actions(a) = menu_route(TrackMenuItem::Reanalyze, &[id], MenuParam::None)
+            .expect("reanalyze debe rutear")
+        else {
+            panic!();
+        };
+        assert_eq!(a, vec![Action::Analyze(vec![id])]);
+        // '···' → Exportar: Action::Export(vec![id])
+        let MenuRoute::Actions(a) =
+            menu_route(TrackMenuItem::ExportQueue, &[id], MenuParam::None).unwrap()
+        else {
+            panic!();
+        };
+        assert_eq!(a, vec![Action::Export(vec![id])]);
+        // doble clic en fila: Action::LoadAndPlay(id)
+        let MenuRoute::Actions(a) =
+            menu_route(TrackMenuItem::Preview, &[id], MenuParam::None).unwrap()
+        else {
+            panic!();
+        };
+        assert_eq!(a, vec![Action::LoadAndPlay(id)]);
+        // rueda armónica: Action::SetCompatibility(Some(key))
+        let key: Key = "7A".parse().unwrap();
+        let MenuRoute::Actions(a) =
+            menu_route(TrackMenuItem::FilterCompatible, &[id], MenuParam::Key(key)).unwrap()
+        else {
+            panic!();
+        };
+        assert_eq!(a, vec![Action::SetCompatibility(Some(key))]);
+        // '···' → Editar tags: abre el MISMO editor de la vista
+        let MenuRoute::TagEditor(ids) =
+            menu_route(TrackMenuItem::EditTags, &[id], MenuParam::None).unwrap()
+        else {
+            panic!();
+        };
+        assert_eq!(ids, vec![id]);
+        // editor de tags (cierre energía editable): ApplyTags con SOLO energy
+        let MenuRoute::Actions(a) =
+            menu_route(TrackMenuItem::Energy, &[id], MenuParam::Energy(9)).unwrap()
+        else {
+            panic!();
+        };
+        assert_eq!(
+            a,
+            vec![Action::ApplyTags {
+                track_ids: vec![id],
+                patch: TagPatch {
+                    energy: Some(9),
+                    ..TagPatch::default()
+                }
+            }]
+        );
+        // columna de rating: Action::Rate por pista
+        let MenuRoute::Actions(a) =
+            menu_route(TrackMenuItem::Rating, &[id, 8], MenuParam::Rating(4)).unwrap()
+        else {
+            panic!();
+        };
+        assert_eq!(
+            a,
+            vec![
+                Action::Rate {
+                    track_id: id,
+                    rating: 4
+                },
+                Action::Rate {
+                    track_id: 8,
+                    rating: 4
+                }
+            ]
+        );
+        // popover de playlists: AddToPlaylist con el lote completo
+        let MenuRoute::Actions(a) = menu_route(
+            TrackMenuItem::AddToPlaylist,
+            &[id, 8],
+            MenuParam::Playlist(3),
+        )
+        .unwrap() else {
+            panic!();
+        };
+        assert_eq!(
+            a,
+            vec![Action::AddToPlaylist {
+                playlist_id: 3,
+                track_ids: vec![id, 8]
+            }]
+        );
+    }
+
+    /// Single-only con N>1: el resolver se niega (defensivo — el menú ya
+    /// no los muestra, y nadie puede forzar el ruteo por detrás).
+    #[test]
+    fn single_only_items_refuse_to_route_for_multi_selections() {
+        let targets = [5, 6, 7];
+        for (item, param) in [
+            (TrackMenuItem::Load, MenuParam::None),
+            (TrackMenuItem::Preview, MenuParam::None),
+            (TrackMenuItem::ViewDetails, MenuParam::None),
+            (TrackMenuItem::Reveal, MenuParam::None),
+            (TrackMenuItem::CopyTitle, MenuParam::None),
+            (TrackMenuItem::CopyArtist, MenuParam::None),
+            (TrackMenuItem::CopyPath, MenuParam::None),
+        ] {
+            assert!(
+                menu_route(item, &targets, param).is_none(),
+                "{item:?} no debe rutear con N>1"
+            );
+        }
+    }
+
+    /// Quitar de la biblioteca viaja como INTENCIÓN con los ids: la acción
+    /// no borra nada por sí misma — la app pide confirmación con conteo y
+    /// solo entonces toca la BD (jamás los archivos).
+    #[test]
+    fn remove_from_library_is_a_confirmation_request_not_a_delete() {
+        let MenuRoute::Actions(a) =
+            menu_route(TrackMenuItem::Remove, &[11, 22], MenuParam::None).unwrap()
+        else {
+            panic!();
+        };
+        assert_eq!(a, vec![Action::RemoveFromLibrary(vec![11, 22])]);
+    }
+
+    /// Ítems de submenú sin su parámetro (o con el parámetro equivocado):
+    /// el ruteo devuelve None — nunca inventa un valor por defecto.
+    #[test]
+    fn submenu_items_without_their_param_do_not_route() {
+        let id = 7;
+        assert!(menu_route(TrackMenuItem::Energy, &[id], MenuParam::None).is_none());
+        assert!(menu_route(TrackMenuItem::Rating, &[id], MenuParam::None).is_none());
+        assert!(menu_route(TrackMenuItem::AddToPlaylist, &[id], MenuParam::None).is_none());
+        assert!(menu_route(TrackMenuItem::FilterCompatible, &[id], MenuParam::None).is_none());
+        // y un parámetro equivocado tampoco
+        assert!(menu_route(TrackMenuItem::Energy, &[id], MenuParam::Rating(5)).is_none());
     }
 
     #[test]

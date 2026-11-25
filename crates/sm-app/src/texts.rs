@@ -125,7 +125,8 @@ fn en(key: &str, fallback: String) -> String {
         "studio.to_playlist" => "To playlist".into(),
         "studio.track_actions_row" => "Track actions".into(),
         "studio.view_footer" => "{n} tracks in this view · {m} in library".into(),
-        "studio.loaded_deck" => "Loaded in Deck {deck}".into(),
+        // Regla del dueño: UN solo reproductor — sin "Deck {deck}" visible.
+        "studio.loaded_deck" => "Loaded in the player".into(),
         "studio.empty_analyzed" => "Everything is analyzed".into(),
         "studio.empty_playlist" => "This playlist is empty".into(),
         "studio.empty" => "No tracks in this view".into(),
@@ -170,6 +171,18 @@ fn en(key: &str, fallback: String) -> String {
         "studio.create_playlist" => "Create playlist".into(),
         "studio.rating_hover" => "Rating of {title}: {r} of 5. Change rating.".into(),
         "studio.n_tracks" => "{n} tracks selected".into(),
+        // ---- menú contextual de fila (click derecho) ----
+        "ctx.load" => "Load track".into(),
+        "ctx.preview" => "Preview".into(),
+        "ctx.filter_compatible" => "Filter compatible".into(),
+        "ctx.energy" => "Edit energy…".into(),
+        "ctx.rating" => "Set rating…".into(),
+        "ctx.reveal" => "Reveal in Explorer".into(),
+        "ctx.copy_title" => "Copy title".into(),
+        "ctx.copy_artist" => "Copy artist".into(),
+        "ctx.copy_path" => "Copy path".into(),
+        "ctx.remove" => "Remove from library…".into(),
+        "ctx.export_queue" => "Add to export queue".into(),
         "menu.rename_playlist" => "Rename…".into(),
         "menu.delete_playlist" => "Delete".into(),
         "usb.backup" => "Verified backup…".into(),
@@ -296,7 +309,8 @@ fn es(key: &str) -> String {
         "studio.to_playlist" => "A playlist".into(),
         "studio.track_actions_row" => "Acciones de la pista".into(),
         "studio.view_footer" => "{n} pistas en esta vista · {m} en biblioteca".into(),
-        "studio.loaded_deck" => "Cargada en Deck {deck}".into(),
+        // Regla del dueño: UN solo reproductor — sin "Deck {deck}" visible.
+        "studio.loaded_deck" => "Cargada en el reproductor".into(),
         "studio.empty_analyzed" => "Todo está analizado".into(),
         "studio.empty_playlist" => "Esta playlist está vacía".into(),
         "studio.empty" => "Sin pistas en esta vista".into(),
@@ -341,6 +355,18 @@ fn es(key: &str) -> String {
         "studio.create_playlist" => "Crear playlist".into(),
         "studio.rating_hover" => "Valoración de {title}: {r} de 5. Cambiar valoración.".into(),
         "studio.n_tracks" => "{n} pistas seleccionadas".into(),
+        // ---- menú contextual de fila (click derecho) ----
+        "ctx.load" => "Cargar pista".into(),
+        "ctx.preview" => "Preview".into(),
+        "ctx.filter_compatible" => "Filtrar compatibles".into(),
+        "ctx.energy" => "Editar energía…".into(),
+        "ctx.rating" => "Valoración…".into(),
+        "ctx.reveal" => "Revelar en Explorer".into(),
+        "ctx.copy_title" => "Copiar título".into(),
+        "ctx.copy_artist" => "Copiar artista".into(),
+        "ctx.copy_path" => "Copiar ruta".into(),
+        "ctx.remove" => "Quitar de la biblioteca…".into(),
+        "ctx.export_queue" => "Añadir a cola de export".into(),
         "menu.rename_playlist" => "Renombrar…".into(),
         "menu.delete_playlist" => "Eliminar".into(),
         "usb.backup" => "Copia de seguridad verificada…".into(),
@@ -393,5 +419,54 @@ mod tests {
         assert_eq!(super::t("es", "studio.cancel"), "Cancelar");
         assert_eq!(super::t("en", "studio.cancel"), "Cancel");
         assert_eq!(super::t("fr", "studio.cancel"), "Cancel");
+    }
+
+    /// Menú contextual de fila: todas las claves nuevas del menú deben
+    /// existir en es y en en (la cascada es→en→clave devuelve la CLAVE
+    /// cruda cuando falta — en producción se pintaría "ctx.load").
+    #[test]
+    fn context_menu_keys_exist_in_both_languages() {
+        let cases = [
+            ("ctx.load", "Cargar pista", "Load track"),
+            ("ctx.preview", "Preview", "Preview"),
+            (
+                "ctx.filter_compatible",
+                "Filtrar compatibles",
+                "Filter compatible",
+            ),
+            ("ctx.energy", "Editar energía…", "Edit energy…"),
+            ("ctx.rating", "Valoración…", "Set rating…"),
+            ("ctx.reveal", "Revelar en Explorer", "Reveal in Explorer"),
+            ("ctx.copy_title", "Copiar título", "Copy title"),
+            ("ctx.copy_artist", "Copiar artista", "Copy artist"),
+            ("ctx.copy_path", "Copiar ruta", "Copy path"),
+            (
+                "ctx.remove",
+                "Quitar de la biblioteca…",
+                "Remove from library…",
+            ),
+            (
+                "ctx.export_queue",
+                "Añadir a cola de export",
+                "Add to export queue",
+            ),
+        ];
+        for (key, es, en) in cases {
+            assert_eq!(super::t("es", key), es, "es falta o difiere: {key}");
+            assert_eq!(super::t("en", key), en, "en falta o difiere: {key}");
+            assert_eq!(super::t("fr", key), en, "fr debe caer al bloque en: {key}");
+        }
+    }
+
+    /// REGLA DEL DUEÑO: solo hay UN reproductor — "Deck A" está PROHIBIDO
+    /// en cualquier string visible. `studio.loaded_deck` era el último
+    /// rastro legado; este test barre que ningún idioma lo diga.
+    #[test]
+    fn no_visible_string_mentions_deck() {
+        for lang in ["es", "en", "fr"] {
+            let text = super::t(lang, "studio.loaded_deck");
+            assert!(!text.contains("Deck"), "{lang} dice Deck: {text}");
+            assert!(!text.is_empty(), "{lang}: la clave quedó vacía");
+        }
     }
 }

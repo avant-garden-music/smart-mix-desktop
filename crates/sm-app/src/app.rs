@@ -1657,7 +1657,7 @@ impl eframe::App for SmartMixApp {
             }
         }
         self.windows(ctx);
-        self.dispatch_studio_actions(actions);
+        self.dispatch_studio_actions(ctx, actions);
     }
 }
 
@@ -2009,7 +2009,7 @@ impl SmartMixApp {
     }
 
     /// Despacha las intenciones de la vista a los métodos EXISTENTES.
-    fn dispatch_studio_actions(&mut self, actions: Vec<studio_model::Action>) {
+    fn dispatch_studio_actions(&mut self, ctx: &egui::Context, actions: Vec<studio_model::Action>) {
         use studio_model::{Action as A, Collection as SC, PitchRange};
         for action in actions {
             match action {
@@ -2197,6 +2197,35 @@ impl SmartMixApp {
                     self.settings_tab = 0;
                 }
                 A::OpenAbout => self.show_about = true,
+                // ---- menú contextual de fila (click derecho) ----
+                A::LoadTrack(id) => {
+                    // Cargar pista: al reproductor SIN reproducir (la fila ya
+                    // queda marcada ▶; el audio arranca con Play/Preview).
+                    self.select(id);
+                    self.deck_load(self.active_deck);
+                }
+                A::ViewDetails(id) => {
+                    self.select(id);
+                    self.detail_view = Some(id);
+                }
+                A::RevealInExplorer(id) => {
+                    match self.track_field_value(id, studio_model::TrackField::Path) {
+                        Some(path) => reveal_in_explorer(&path),
+                        None => self.status_msg = "Sin ruta en la biblioteca para revelar.".into(),
+                    }
+                }
+                A::CopyTrackField { id, field } => match self.track_field_value(id, field) {
+                    Some(value) => {
+                        ctx.output_mut(|output| output.copied_text = value);
+                        self.status_msg = "Copiado al portapapeles.".into();
+                    }
+                    None => self.status_msg = "Nada que copiar.".into(),
+                },
+                A::RemoveFromLibrary(ids) => {
+                    // SOLO la intención: la ventana de confirmación existente
+                    // (windows.rs) muestra el conteo y NUNCA borra archivos.
+                    self.confirm_remove = Some(ids);
+                }
             }
         }
         // selección de la vista → estado de la app (tag editor, hooks)
@@ -2416,6 +2445,35 @@ impl SmartMixApp {
         player.decks[deck].play();
         self.deck_track_id[deck] = Some(id);
         self.active_deck = deck;
+    }
+
+    /// Menú contextual — Cargar pista: al reproductor SIN reproducir.
+    /// Espejo exacto de `deck_play` sin `.play()`: mismo deck activo y
+    /// mismo `deck_track_id`; el audio arranca con Play/Preview.
+    pub(crate) fn deck_load(&mut self, deck: usize) {
+        eprintln!("[load] deck={deck} sel={:?}", self.selected_id);
+        let Some(id) = self.selected_id else { return };
+        let Some(full) = &self.detail else { return };
+        let Some(player) = &self.player else { return };
+        let path = full.meta.path.clone();
+        player.decks[deck].load(&path);
+        self.deck_track_id[deck] = Some(id);
+        self.active_deck = deck;
+    }
+
+    /// Menú contextual — Copiar/Revelar: resuelve título/artista/ruta de la
+    /// pista DESDE LA BD (la tabla del studio no carga la ruta por frame).
+    fn track_field_value(&self, id: i64, field: studio_model::TrackField) -> Option<String> {
+        let full = self
+            .db
+            .lock()
+            .ok()
+            .and_then(|db| db.track_full(id).unwrap_or(None))?;
+        Some(match field {
+            studio_model::TrackField::Title => full.meta.title,
+            studio_model::TrackField::Artist => full.meta.artist,
+            studio_model::TrackField::Path => full.meta.path,
+        })
     }
 
     pub(crate) fn now_playing_id(&self) -> Option<i64> {
@@ -2911,6 +2969,28 @@ pub(crate) fn cue_time_by_letter(cues: &[sm_model::CuePoint], letter: char) -> O
         .map(|cue| cue.time_s)
 }
 
+/// Menú contextual — Revelar en Explorer: abre la ventana del Explorer con
+/// el archivo SELECCIONADO (`/select,`). Proceso despegado, sin bloquear
+/// la UI; en otras plataformas queda como no-op registrado.
+fn reveal_in_explorer(path: &str) {
+    #[cfg(target_os = "windows")]
+    let spawned = std::process::Command::new("explorer")
+        .arg(format!("/select,{path}"))
+        .spawn();
+    #[cfg(not(target_os = "windows"))]
+    let spawned = {
+        let _ = path;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "no windows",
+        ))
+    };
+    match spawned {
+        Ok(_) => eprintln!("[ctx] revelar en Explorer: {path}"),
+        Err(err) => eprintln!("[ctx] no se pudo abrir el Explorer ({err}): {path}"),
+    }
+}
+
 /// Etiqueta del dropdown de destino USB (F-25): letra, etiqueta del
 /// volumen, espacio libre y marca FAT32 cuando aplica.
 fn usb_dest_label(d: &crate::usb::UsbDrive) -> String {
@@ -3208,5 +3288,35 @@ mod tests {
         let n = import_flush_chunk(&db, &[a, b]);
         assert_eq!(n, 2, "ambas exitosas, igual que con tx por pista");
         assert_eq!(pending_count(&db), 1, "upsert por path UNIQUE: una fila");
+    }
+
+    /// Menú contextual — Quitar de la biblioteca: `delete_track` toca SOLO
+    /// la base de datos. El archivo en disco queda INTACTO (contrato del
+    /// dueño: "SOLO BD, nunca borra archivos").
+    #[test]
+    fn remove_from_library_never_touches_the_files() {
+        let db = LibraryDb::open_in_memory().unwrap();
+        // pista cuyo archivo EXISTE de verdad en disco
+        let dir = std::env::temp_dir().join("sm_ctx_remove_guard");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("keepme.mp3");
+        std::fs::write(&path, b"fake audio bytes").unwrap();
+        let mut f = scanned(0, 181.0);
+        f.meta.path = path.display().to_string();
+        assert_eq!(import_flush_chunk(&db, &[f]), 1);
+        let id = db.query(&LibraryQuery::default()).unwrap()[0].id;
+        assert!(db.delete_track(id).is_ok(), "la BD acepta el borrado");
+        // la fila desapareció de la biblioteca…
+        assert!(
+            db.track_full(id).unwrap().is_none(),
+            "la pista ya no está en la BD"
+        );
+        // …pero el ARCHIVO sigue en disco, byte a byte
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"fake audio bytes",
+            "el archivo de audio NO se toca jamás"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

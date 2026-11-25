@@ -30,6 +30,9 @@ impl SmartMixApp {
                             eprintln!("[feature] {n} pista(s) quitadas de la biblioteca");
                             self.confirm_remove = None;
                             self.selected_set.clear();
+                            // la tabla del studio también suelta la selección
+                            // (checkboxes + ancla del rango) — sin filas fantasma
+                            self.studio_ui.clear_selection();
                             self.refresh();
                         }
                         if ui.button("Cancelar").clicked() {

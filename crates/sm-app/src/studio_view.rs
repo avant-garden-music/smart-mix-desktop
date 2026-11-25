@@ -21,8 +21,9 @@ use egui_extras::{Column, TableBuilder};
 
 use crate::studio;
 use crate::studio_model::{
-    Action, AnalysisProgress, Collection, Deck, EditField, Key, KeyMode, Model, PitchRange,
-    Popover, SortField, Track, TrackId, WaveformView,
+    context_menu_items, menu_route, Action, AnalysisProgress, Collection, Deck, EditField, Key,
+    KeyMode, MenuParam, MenuRoute, Model, PitchRange, Popover, SortField, Track, TrackId,
+    TrackMenuItem, WaveformView,
 };
 use crate::texts;
 
@@ -2331,6 +2332,18 @@ impl StudioUi {
                                         );
                                     });
                                     let response = row.response();
+                                    // Click derecho: la selección sobre la que
+                                    // abre el menú es la que se VE — clic en
+                                    // una fila checked conserva N; clic fuera
+                                    // colapsa el menú a esa fila (misma regla
+                                    // del '···').
+                                    if response.secondary_clicked() {
+                                        if !self.checked.contains(&track.id) {
+                                            self.checked.clear();
+                                            self.selected = Some(track.id);
+                                            self.editor = None;
+                                        }
+                                    }
                                     if response.clicked() && !child_handled {
                                         if shift_held {
                                             // shift+clic de FILA: rango desde el ancla
@@ -2344,6 +2357,13 @@ impl StudioUi {
                                     if response.double_clicked() {
                                         double_clicked_track = Some(track.id);
                                     }
+                                    // Menú contextual (click derecho): MISMO
+                                    // ruteo del '···' — menu_route resuelve al
+                                    // enum Action compartido o abre el MISMO
+                                    // editor de tags de la vista.
+                                    response.context_menu(|ui| {
+                                        self.row_context_menu(ui, lang, model, track.id, actions);
+                                    });
                                 });
                             });
                         // devolver los anchos (el drag del header en este frame
@@ -3044,6 +3064,257 @@ impl StudioUi {
             });
         if close {
             self.popover = None;
+        }
+    }
+
+    /// Menú contextual de fila (click derecho), adaptativo 1 vs N pistas:
+    /// la VISIBILIDAD la fija `studio_model::context_menu_items` (con N>1
+    /// solo acciones seguras en lote) y el RUTEO es el MISMO del menú
+    /// '···' — `menu_route` resuelve al enum `Action` compartido o abre el
+    /// MISMO editor de tags de la vista. Cero lógica duplicada.
+    fn row_context_menu(
+        &mut self,
+        ui: &mut Ui,
+        lang: &str,
+        model: &Model,
+        row_id: TrackId,
+        actions: &mut Vec<Action>,
+    ) {
+        // La selección sobre la que abre el menú es la que se VE: la fila
+        // está dentro de la selección de checkboxes → N pistas; si no, el
+        // clic derecho ya colapsó la selección a esta fila (ver caller).
+        let targets: Vec<TrackId> = if !self.checked.is_empty() && self.checked.contains(&row_id) {
+            self.checked.iter().copied().collect()
+        } else {
+            vec![row_id]
+        };
+        if targets.len() > 1 {
+            ui.label(studio::small(
+                texts::t(lang, "studio.n_tracks").replace("{n}", &targets.len().to_string()),
+                studio::SUBTLE,
+            ));
+            ui.add_space(4.0);
+        }
+        let track = find_track(model, row_id);
+        let has_key = track.and_then(|track| track.key).is_some();
+        let has_playlists = !model.playlists.is_empty();
+        for item in context_menu_items(targets.len()).iter().copied() {
+            match item {
+                TrackMenuItem::Load => {
+                    if studio::menu_button(ui, &texts::t(lang, "ctx.load"), studio::Icon::Play)
+                        .clicked()
+                    {
+                        self.run_menu_route(ui, model, &targets, item, MenuParam::None, actions);
+                    }
+                }
+                TrackMenuItem::Preview => {
+                    if studio::menu_button(ui, &texts::t(lang, "ctx.preview"), studio::Icon::Disc)
+                        .clicked()
+                    {
+                        self.run_menu_route(ui, model, &targets, item, MenuParam::None, actions);
+                    }
+                }
+                TrackMenuItem::FilterCompatible => {
+                    // solo si la pista tiene tono: sin key no hay rueda que activar
+                    let key = track.and_then(|track| track.key);
+                    ui.add_enabled_ui(has_key, |ui| {
+                        if studio::menu_button(
+                            ui,
+                            &texts::t(lang, "ctx.filter_compatible"),
+                            studio::Icon::Library,
+                        )
+                        .clicked()
+                        {
+                            self.run_menu_route(
+                                ui,
+                                model,
+                                &targets,
+                                item,
+                                key.map(MenuParam::Key).unwrap_or(MenuParam::None),
+                                actions,
+                            );
+                        }
+                    });
+                }
+                TrackMenuItem::EditTags => {
+                    if studio::menu_button(
+                        ui,
+                        &texts::t(lang, "studio.edit_tags"),
+                        studio::Icon::Tag,
+                    )
+                    .clicked()
+                    {
+                        self.run_menu_route(ui, model, &targets, item, MenuParam::None, actions);
+                    }
+                }
+                TrackMenuItem::Energy => {
+                    // submenú 1..=10 (la escala del editor de tags)
+                    ui.menu_button(texts::t(lang, "ctx.energy"), |ui| {
+                        for level in 1..=10u8 {
+                            if studio::menu_button(
+                                ui,
+                                &format!("{level} / 10"),
+                                studio::Icon::Sliders,
+                            )
+                            .clicked()
+                            {
+                                self.run_menu_route(
+                                    ui,
+                                    model,
+                                    &targets,
+                                    item,
+                                    MenuParam::Energy(level),
+                                    actions,
+                                );
+                            }
+                        }
+                    });
+                }
+                TrackMenuItem::Rating => {
+                    // submenú 0..=5 (0 = sin valorar) — mismas estrellas de la tabla
+                    ui.menu_button(texts::t(lang, "ctx.rating"), |ui| {
+                        for rating in 0..=5u8 {
+                            let label = if rating == 0 {
+                                texts::t(lang, "studio.rating_none")
+                            } else {
+                                format!("{} {rating}/5", "★".repeat(rating as usize))
+                            };
+                            if studio::menu_button(ui, &label, studio::Icon::Plus).clicked() {
+                                self.run_menu_route(
+                                    ui,
+                                    model,
+                                    &targets,
+                                    item,
+                                    MenuParam::Rating(rating),
+                                    actions,
+                                );
+                            }
+                        }
+                    });
+                }
+                TrackMenuItem::AddToPlaylist => {
+                    // submenú de playlists (igual que el popover: mismas
+                    // Action::AddToPlaylist con el lote completo)
+                    ui.add_enabled_ui(has_playlists, |ui| {
+                        ui.menu_button(texts::t(lang, "detail.add_to_playlist"), |ui| {
+                            for playlist in &model.playlists {
+                                if studio::menu_button(ui, &playlist.name, studio::Icon::List)
+                                    .clicked()
+                                {
+                                    self.run_menu_route(
+                                        ui,
+                                        model,
+                                        &targets,
+                                        item,
+                                        MenuParam::Playlist(playlist.id),
+                                        actions,
+                                    );
+                                }
+                            }
+                        });
+                    });
+                }
+                TrackMenuItem::Reanalyze => {
+                    if studio::menu_button(
+                        ui,
+                        &texts::t(lang, "studio.reanalyze"),
+                        studio::Icon::Refresh,
+                    )
+                    .clicked()
+                    {
+                        self.run_menu_route(ui, model, &targets, item, MenuParam::None, actions);
+                    }
+                }
+                TrackMenuItem::ViewDetails => {
+                    if studio::menu_button(ui, &texts::t(lang, "menu.detail"), studio::Icon::More)
+                        .clicked()
+                    {
+                        self.run_menu_route(ui, model, &targets, item, MenuParam::None, actions);
+                    }
+                }
+                TrackMenuItem::Reveal => {
+                    if studio::menu_button(ui, &texts::t(lang, "ctx.reveal"), studio::Icon::Usb)
+                        .clicked()
+                    {
+                        self.run_menu_route(ui, model, &targets, item, MenuParam::None, actions);
+                    }
+                }
+                TrackMenuItem::CopyTitle => {
+                    if studio::menu_button(
+                        ui,
+                        &texts::t(lang, "ctx.copy_title"),
+                        studio::Icon::Copy,
+                    )
+                    .clicked()
+                    {
+                        self.run_menu_route(ui, model, &targets, item, MenuParam::None, actions);
+                    }
+                }
+                TrackMenuItem::CopyArtist => {
+                    if studio::menu_button(
+                        ui,
+                        &texts::t(lang, "ctx.copy_artist"),
+                        studio::Icon::Copy,
+                    )
+                    .clicked()
+                    {
+                        self.run_menu_route(ui, model, &targets, item, MenuParam::None, actions);
+                    }
+                }
+                TrackMenuItem::CopyPath => {
+                    if studio::menu_button(ui, &texts::t(lang, "ctx.copy_path"), studio::Icon::Copy)
+                        .clicked()
+                    {
+                        self.run_menu_route(ui, model, &targets, item, MenuParam::None, actions);
+                    }
+                }
+                TrackMenuItem::Remove => {
+                    // SOLO intención: la app pide confirmación con conteo y
+                    // NUNCA borra archivos (ventana existente de windows.rs).
+                    if studio::menu_button(ui, &texts::t(lang, "ctx.remove"), studio::Icon::Close)
+                        .clicked()
+                    {
+                        self.run_menu_route(ui, model, &targets, item, MenuParam::None, actions);
+                    }
+                }
+                TrackMenuItem::ExportQueue => {
+                    if studio::menu_button(
+                        ui,
+                        &texts::t(lang, "ctx.export_queue"),
+                        studio::Icon::Upload,
+                    )
+                    .clicked()
+                    {
+                        self.run_menu_route(ui, model, &targets, item, MenuParam::None, actions);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Ejecuta el ruteo COMPARTIDO de los menús de fila: la resolución la
+    /// hace `studio_model::menu_route` (única fuente de verdad) y aquí
+    /// solo se despacha — mismas `Action` al mismo dispatcher de la app, o
+    /// el MISMO `open_editor` que usa el menú '···' de la fila.
+    fn run_menu_route(
+        &mut self,
+        ui: &mut Ui,
+        model: &Model,
+        targets: &[TrackId],
+        item: TrackMenuItem,
+        param: MenuParam,
+        actions: &mut Vec<Action>,
+    ) {
+        match menu_route(item, targets, param) {
+            Some(MenuRoute::Actions(list)) => {
+                actions.extend(list);
+                ui.close_menu();
+            }
+            Some(MenuRoute::TagEditor(ids)) => {
+                self.open_editor(model, ids, EditField::Title);
+                ui.close_menu();
+            }
+            None => {}
         }
     }
 
@@ -4591,6 +4862,225 @@ mod tests {
         }];
         let _ = frame(&ctx, 2.0, esc, &mut sui, &model);
         assert!(sui.checked_tracks().is_empty(), "Escape vacía la selección");
+    }
+
+    // -- menú contextual click derecho: apertura, visibilidad 1 vs N, ruteo --
+
+    /// Click derecho (secundario) sobre una fila: abre el menú contextual
+    /// egui EN esa posición; devuelve la posición para clicar sus ítems.
+    fn right_click_row(
+        ctx: &egui::Context,
+        sui: &mut StudioUi,
+        model: &Model,
+        x: f32,
+        y: f32,
+        t0: f64,
+    ) -> Vec<Action> {
+        click_at_mod(
+            ctx,
+            sui,
+            model,
+            x,
+            y,
+            t0,
+            egui::Modifiers::default(),
+            egui::PointerButton::Secondary,
+        )
+    }
+
+    #[test]
+    fn right_click_single_row_opens_context_menu_that_loads_the_track() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut sui = StudioUi::new();
+        let model = Model {
+            tracks: vec![
+                sample_track(11, "Alpha", 120.0),
+                sample_track(22, "Beta", 121.0),
+                sample_track(33, "Gamma", 122.0),
+            ],
+            library_count: 3,
+            ..Model::default()
+        };
+        let _ = frame(&ctx, 0.0, vec![], &mut sui, &model);
+        // localizar la fila 2 (barrido del patrón de doble clic)
+        let mut clock = 300.0;
+        let mut y = 380.0;
+        let mut hits = Vec::new();
+        while y < 620.0 {
+            clock += 0.4;
+            let actions = click_at(&ctx, &mut sui, &model, 500.0, y, clock);
+            if actions
+                .iter()
+                .any(|a| matches!(a, Action::SelectTrack(id) if *id == 22))
+            {
+                hits.push(y);
+            }
+            y += 6.0;
+        }
+        assert!(!hits.is_empty(), "no se encontró la fila 2");
+        let y2 = hits[hits.len() / 2];
+        clock += 1.0;
+        // click derecho sobre la fila 2 → el menú se abre en el puntero
+        let _ = right_click_row(&ctx, &mut sui, &model, 500.0, y2, clock);
+        clock += 1.0;
+        // el PRIMER ítem del menú single es "Cargar pista": el menú de 15
+        // ítems NO cabe debajo de la fila y egui lo VOLTEA hacia arriba
+        // (constrain_to) — el barrido cubre toda la columna del popup y el
+        // primer BOTÓN desde arriba es exactamente "Cargar pista" → emite
+        // LoadTrack — sin reproducir. Los clics que caen fuera del menú lo
+        // cierran: se reabre con otro click derecho en la misma fila.
+        let mut loaded = false;
+        let mut probe_y = 300.0;
+        while probe_y < 880.0 && !loaded {
+            let actions = click_at(&ctx, &mut sui, &model, 500.0 + 70.0, probe_y, clock);
+            clock += 0.5;
+            loaded = actions.iter().any(|a| matches!(a, Action::LoadTrack(22)));
+            if !loaded {
+                // si el clic cerró el menú sin efecto, reabrir antes de seguir
+                let _ = right_click_row(&ctx, &mut sui, &model, 500.0, y2, clock);
+                clock += 0.5;
+            }
+            probe_y += 6.0;
+        }
+        assert!(
+            loaded,
+            "el menú single debe ofrecer 'Cargar pista' → LoadTrack(22)"
+        );
+    }
+
+    #[test]
+    fn right_click_multi_selection_menu_hides_single_only_items() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut sui = StudioUi::new();
+        // 2 pistas y las DOS checked: cualquier fila recibe el menú de N=2
+        // (robusto al corrimiento vertical que introduce la barra de
+        // "N seleccionadas" al aparecer).
+        let model = Model {
+            tracks: vec![
+                sample_track(11, "Alpha", 120.0),
+                sample_track(22, "Beta", 121.0),
+            ],
+            library_count: 2,
+            ..Model::default()
+        };
+        let _ = frame(&ctx, 0.0, vec![], &mut sui, &model);
+        // localizar la fila 1 con el barrido (la selección está vacía)
+        let mut clock = 300.0;
+        let mut y = 380.0;
+        let mut hits = Vec::new();
+        while y < 620.0 {
+            clock += 0.4;
+            let actions = click_at(&ctx, &mut sui, &model, 500.0, y, clock);
+            if actions
+                .iter()
+                .any(|a| matches!(a, Action::SelectTrack(id) if *id == 11))
+            {
+                hits.push(y);
+            }
+            y += 6.0;
+        }
+        assert!(!hits.is_empty(), "no se encontró la fila 1");
+        let y1 = hits[hits.len() / 2];
+        // sembrar la selección múltiple (ambas filas) y dejar un frame para
+        // que la barra de selección aparezca y corra la tabla (~42px)
+        crate::studio_model::selection::toggle(&mut sui.checked, &mut sui.anchor, 11);
+        crate::studio_model::selection::toggle(&mut sui.checked, &mut sui.anchor, 22);
+        let _ = frame(&ctx, clock + 0.2, vec![], &mut sui, &model);
+        clock += 1.0;
+        // click derecho sobre una fila de la selección: conserva N=2
+        let _ = right_click_row(&ctx, &mut sui, &model, 500.0, y1 + 42.0, clock);
+        clock += 1.0;
+        // con N>1 el primer ítem de acción es "Editar tags" (NO 'Cargar
+        // pista'): el clic dentro del menú abre el EDITOR con las dos pistas
+        let mut opened = false;
+        let mut probe_y = y1 + 42.0 + 8.0;
+        while probe_y < y1 + 42.0 + 160.0 && !opened {
+            let _ = click_at(&ctx, &mut sui, &model, 500.0 + 70.0, probe_y, clock);
+            clock += 0.5;
+            opened = sui
+                .editor
+                .as_ref()
+                .is_some_and(|draft| draft.ids == vec![11, 22]);
+            if !opened {
+                let _ = right_click_row(&ctx, &mut sui, &model, 500.0, y1 + 42.0, clock);
+                clock += 0.5;
+            }
+            probe_y += 6.0;
+        }
+        assert!(
+            opened,
+            "el menú multi abre el editor de tags con [11, 22] (primer ítem)"
+        );
+    }
+
+    #[test]
+    fn right_click_outside_the_selection_collapses_to_that_row() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut sui = StudioUi::new();
+        let model = Model {
+            tracks: vec![
+                sample_track(11, "Alpha", 120.0),
+                sample_track(22, "Beta", 121.0),
+                sample_track(33, "Gamma", 122.0),
+                sample_track(44, "Delta", 123.0),
+            ],
+            library_count: 4,
+            ..Model::default()
+        };
+        let _ = frame(&ctx, 0.0, vec![], &mut sui, &model);
+        // selección en filas 2-3 y click derecho FUERA (fila 4)
+        crate::studio_model::selection::toggle(&mut sui.checked, &mut sui.anchor, 22);
+        crate::studio_model::selection::toggle(&mut sui.checked, &mut sui.anchor, 33);
+        let mut clock = 300.0;
+        let mut y = 380.0;
+        let mut hits = Vec::new();
+        while y < 620.0 {
+            clock += 0.4;
+            let actions = click_at(&ctx, &mut sui, &model, 500.0, y, clock);
+            if actions
+                .iter()
+                .any(|a| matches!(a, Action::SelectTrack(id) if *id == 44))
+            {
+                hits.push(y);
+            }
+            y += 6.0;
+        }
+        assert!(!hits.is_empty(), "no se encontró la fila 4");
+        let y4 = hits[hits.len() / 2];
+        // el barrido limpió la selección (clics simples): resembrar y dejar
+        // un frame para que la barra de selección corra la tabla (~42px)
+        sui.checked.clear();
+        crate::studio_model::selection::toggle(&mut sui.checked, &mut sui.anchor, 22);
+        crate::studio_model::selection::toggle(&mut sui.checked, &mut sui.anchor, 33);
+        let _ = frame(&ctx, clock + 0.2, vec![], &mut sui, &model);
+        clock += 1.0;
+        // click derecho en la fila 4 (fuera de la selección): el menú
+        // colapsa a ESA fila — target = 1 pista
+        let _ = right_click_row(&ctx, &mut sui, &model, 500.0, y4 + 42.0, clock);
+        assert!(
+            sui.checked_tracks().is_empty(),
+            "click derecho fuera de la selección la colapsa"
+        );
+        assert_eq!(sui.selected_track(), Some(44));
+        clock += 1.0;
+        // primer ítem del menú single → Cargar pista (44). El menú se
+        // VOLTEA hacia arriba (15 ítems): barrido de toda la columna.
+        let mut loaded = false;
+        let mut probe_y = 300.0;
+        while probe_y < 880.0 && !loaded {
+            let actions = click_at(&ctx, &mut sui, &model, 500.0 + 70.0, probe_y, clock);
+            clock += 0.5;
+            loaded = actions.iter().any(|a| matches!(a, Action::LoadTrack(44)));
+            if !loaded {
+                let _ = right_click_row(&ctx, &mut sui, &model, 500.0, y4 + 42.0, clock);
+                clock += 0.5;
+            }
+            probe_y += 6.0;
+        }
+        assert!(loaded, "el menú tras colapsar ofrece LoadTrack(44)");
     }
 
     // ---- resize de columnas: el asa existe, es visible y responde ------
